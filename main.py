@@ -13,6 +13,15 @@ while True:
     # 根据用户选择决定后续操作。 1、查看网卡信息，0、退出系统
     if action == "1":
         tools_change_ip.show_interface_list()
+        tools_change_ip.action()
+
+    elif action == "2":
+        tools_change_ip.show_interface_list()
+        tools_change_ip.action_me()
+
+    elif action == "3":
+        tools_change_ip.show_interface_list()
+        tools_change_ip.action_dhcp()
 
     elif action == "0":
         print("欢迎再次使用【IP管理系统】")
