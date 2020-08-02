@@ -7,7 +7,7 @@ import click
 from subprocess import Popen, PIPE, call
 
 interface_list = []
-com_ip_list = ["192.168.101.233", "255.255.255.0", "192.168.101.1", "114.114.114.114"]
+com_ip_list = ["192.168.101.233", "255.255.255.0", "192.168.101.1", "114.114.114.114 8.8.8.8"]
 
 
 def show_menu():
@@ -30,7 +30,7 @@ def show_interface_list():
     """
     show_interface_str = Popen("networksetup -listallnetworkservices | awk 'NR == 1 {next} {print $1}'",
                                stdin=None, stdout=PIPE, shell=True)
-    network_name_str = str(show_interface_str.communicate()[0], encoding= "utf8")
+    network_name_str = str(show_interface_str.communicate()[0], encoding="utf8")
     network_name_str_list = network_name_str.rstrip().split("\n")
     for i in network_name_str_list:
         if i not in interface_list:
@@ -52,10 +52,10 @@ def show_interface_ip(interface_name):
     :return:
     """
     show_interface_ip_str = Popen("networksetup -getinfo %s" % interface_name,
-                               stdin=None, stdout=PIPE, shell=True)
+                                  stdin=None, stdout=PIPE, shell=True)
     show_interface_dns_str = Popen("networksetup -getdnsservers %s" % interface_name,
-                               stdin=None, stdout=PIPE, shell=True)
-    network_ip_str = str(show_interface_ip_str.communicate()[0], encoding= "utf8")
+                                   stdin=None, stdout=PIPE, shell=True)
+    network_ip_str = str(show_interface_ip_str.communicate()[0], encoding="utf8")
     network_dn_str = str(show_interface_dns_str.communicate()[0], encoding="utf8")
     print("您的【%s】网卡IP如下：".center(50, "=") % interface_name)
     print(network_ip_str)
@@ -63,15 +63,15 @@ def show_interface_ip(interface_name):
     print(network_dn_str)
 
 
-def change_interface_ip(name,ip,netmask,gateway,dns):
+def change_interface_ip(name, ip, netmask, gateway, dns):
     """修改网卡信息
 
     :return:
     """
-    set_ip_str = Popen("networksetup -setmanual %s %s %s %s" % (name, ip, netmask , gateway),
-                               stdin=None, stdout=PIPE, shell=True)
+    set_ip_str = Popen("networksetup -setmanual %s %s %s %s" % (name, ip, netmask, gateway),
+                       stdin=None, stdout=PIPE, shell=True)
     set_dns_str = Popen("networksetup -setdnsservers %s %s" % (name, dns),
-                               stdin=None, stdout=PIPE, shell=True)
+                        stdin=None, stdout=PIPE, shell=True)
     time.sleep(3)
     show_interface_ip(name)
 
@@ -82,9 +82,9 @@ def change_interface_dhcp(name):
     :return:
     """
     set_ip_str = Popen("networksetup -setdhcp %s" % name,
-                               stdin=None, stdout=PIPE, shell=True)
+                       stdin=None, stdout=PIPE, shell=True)
     set_dns_str = Popen("networksetup -setdnsservers %s empty" % name,
-                               stdin=None, stdout=PIPE, shell=True)
+                        stdin=None, stdout=PIPE, shell=True)
     time.sleep(3)
     show_interface_ip(name)
 
@@ -108,7 +108,7 @@ def action():
                                         click.prompt("请输入IP：", default="192.168.1.233"),
                                         click.prompt("请输入Mask：", default="255.255.255.0"),
                                         click.prompt("请输入Gateway：", default="192.168.1.1"),
-                                        click.prompt("请输入Gateway：", default="114.114.114.114 8.8.8.8"))
+                                        click.prompt("请输入DNS：", default="114.114.114.114 8.8.8.8"))
                 if user_c_str == "3":
                     change_interface_ip(interface_list[name_input_str],
                                         com_ip_list[0],
@@ -125,7 +125,7 @@ def action():
                                     click.prompt("请输入IP：", default="192.168.1.233"),
                                     click.prompt("请输入Mask：", default="255.255.255.0"),
                                     click.prompt("请输入Gateway：", default="192.168.1.1"),
-                                    click.prompt("请输入Gateway：", default="114.114.114.114 8.8.8.8"))
+                                    click.prompt("请输入DNS：", default="114.114.114.114 8.8.8.8"))
             if user_c_str == "3":
                 change_interface_ip(interface_list[name_input_str],
                                     com_ip_list[0],
@@ -135,4 +135,3 @@ def action():
 
     else:
         print("输入错误，请从新输入： ")
-
