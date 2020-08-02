@@ -103,13 +103,13 @@ def action():
                 user_c_str = input("【1】DHCP 【2】手动添加【3】列表预设【0】退出 : ")
                 if user_c_str == "1":
                     change_interface_dhcp(interface_list[name_input_str])
-                if user_c_str == "2":
+                elif user_c_str == "2":
                     change_interface_ip(interface_list[name_input_str],
                                         click.prompt("请输入IP：", default="192.168.1.233"),
                                         click.prompt("请输入Mask：", default="255.255.255.0"),
                                         click.prompt("请输入Gateway：", default="192.168.1.1"),
                                         click.prompt("请输入DNS：", default="114.114.114.114 8.8.8.8"))
-                if user_c_str == "3":
+                elif user_c_str == "3":
                     change_interface_ip(interface_list[name_input_str],
                                         com_ip_list[0],
                                         com_ip_list[1],
@@ -120,13 +120,13 @@ def action():
             user_c_str = input("【1】DHCP 【2】手动添加【3】列表预设【0】退出 : ")
             if user_c_str == "1":
                 change_interface_dhcp(interface_list[name_input_str])
-            if user_c_str == "2":
+            elif user_c_str == "2":
                 change_interface_ip(interface_list[name_input_str],
                                     click.prompt("请输入IP：", default="192.168.1.233"),
                                     click.prompt("请输入Mask：", default="255.255.255.0"),
                                     click.prompt("请输入Gateway：", default="192.168.1.1"),
                                     click.prompt("请输入DNS：", default="114.114.114.114 8.8.8.8"))
-            if user_c_str == "3":
+            elif user_c_str == "3":
                 change_interface_ip(interface_list[name_input_str],
                                     com_ip_list[0],
                                     com_ip_list[1],
