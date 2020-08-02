@@ -1,5 +1,13 @@
 # 使用方法
 
+- 安装工具
+
+```shell
+pip3 install click
+```
+
+  
+
 - 创建一个shell，格式如下：
 
 ```shell

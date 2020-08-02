@@ -3,6 +3,7 @@
 # Jimmy Lin
 import os
 import time
+import click
 from subprocess import Popen, PIPE, call
 
 interface_list = []
@@ -62,12 +63,12 @@ def show_interface_ip(interface_name):
     print(network_dn_str)
 
 
-def change_interface_ip(name,ip,mask,gateway,dns):
+def change_interface_ip(name,ip,netmask,gateway,dns):
     """修改网卡信息
 
     :return:
     """
-    set_ip_str = Popen("networksetup -setmanual %s %s %s %s" % (name, ip, mask , gateway),
+    set_ip_str = Popen("networksetup -setmanual %s %s %s %s" % (name, ip, netmask , gateway),
                                stdin=None, stdout=PIPE, shell=True)
     set_dns_str = Popen("networksetup -setdnsservers %s %s" % (name, dns),
                                stdin=None, stdout=PIPE, shell=True)
@@ -104,10 +105,10 @@ def action():
                     change_interface_dhcp(interface_list[name_input_str])
                 if user_c_str == "2":
                     change_interface_ip(interface_list[name_input_str],
-                                        input("请输入IP："),
-                                        input("请输入NetMask： "),
-                                        input("请输入网关地址："),
-                                        input("请输入DNS服务器： "))
+                                        click.prompt("请输入IP：", default="192.168.1.233"),
+                                        click.prompt("请输入Mask：", default="255.255.255.0"),
+                                        click.prompt("请输入Gateway：", default="192.168.1.1"),
+                                        click.prompt("请输入Gateway：", default="114.114.114.114 8.8.8.8"))
                 if user_c_str == "3":
                     change_interface_ip(interface_list[name_input_str],
                                         com_ip_list[0],
@@ -121,10 +122,10 @@ def action():
                 change_interface_dhcp(interface_list[name_input_str])
             if user_c_str == "2":
                 change_interface_ip(interface_list[name_input_str],
-                                    input("请输入IP："),
-                                    input("请输入NetMask： "),
-                                    input("请输入网关地址："),
-                                    input("请输入DNS服务器： "))
+                                    click.prompt("请输入IP：", default="192.168.1.233"),
+                                    click.prompt("请输入Mask：", default="255.255.255.0"),
+                                    click.prompt("请输入Gateway：", default="192.168.1.1"),
+                                    click.prompt("请输入Gateway：", default="114.114.114.114 8.8.8.8"))
             if user_c_str == "3":
                 change_interface_ip(interface_list[name_input_str],
                                     com_ip_list[0],
@@ -134,5 +135,4 @@ def action():
 
     else:
         print("输入错误，请从新输入： ")
-
 
