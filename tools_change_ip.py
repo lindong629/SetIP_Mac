@@ -9,8 +9,8 @@ from subprocess import Popen, PIPE, call
 interface_list = []
 com_ip_list1 = ["255.255.255.0", "192.168.101.1", "114.114.114.114 8.8.8.8"]
 com_ip_list2 = ["255.255.255.0", "192.168.101.2", "114.114.114.114 8.8.8.8"]
-home_ip_list254 = ["255.255.255.0", "172.16.168.254", "172.16.168.254"]
 home_ip_list3 = ["255.255.255.0", "172.16.168.3", "172.16.168.254"]
+home_ip_list254 = ["255.255.255.0", "172.16.168.254", "172.16.168.254"]
 
 
 def show_menu():
@@ -19,7 +19,7 @@ def show_menu():
     :return:
     """
     print("欢迎使用IP管理系统For MacOS".center(50, "-"))
-    for i in ["1、查看网卡信息", "2、私人定制设置", "3、自动获取DHCP", "0、退出系统"]:
+    for i in ["1、手动配置", "2、定制设置", "3、自动获取", "0、退出系统"]:
         print(i)
     print("当前版本V1.0 by Python3".center(50, "-"))
     print("博客 https://blog.rtwork.win ".center(50, "-"))
@@ -69,9 +69,9 @@ def change_interface_ip(name, ip, netmask, gateway, dns):
 
     :return:
     """
-    set_ip_str = Popen("networksetup -setmanual %s %s %s %s" % (name, ip, netmask, gateway),
+    Popen("networksetup -setmanual %s %s %s %s" % (name, ip, netmask, gateway),
                        stdin=None, stdout=PIPE, shell=True)
-    set_dns_str = Popen("networksetup -setdnsservers %s %s" % (name, dns),
+    Popen("networksetup -setdnsservers %s %s" % (name, dns),
                         stdin=None, stdout=PIPE, shell=True)
     time.sleep(3)
     show_interface_ip(name)
@@ -82,157 +82,103 @@ def change_interface_dhcp(name):
 
     :return:
     """
-    set_ip_str = Popen("networksetup -setdhcp %s" % name,
+    Popen("networksetup -setdhcp %s" % name,
                        stdin=None, stdout=PIPE, shell=True)
-    set_dns_str = Popen("networksetup -setdnsservers %s empty" % name,
+    Popen("networksetup -setdnsservers %s empty" % name,
                         stdin=None, stdout=PIPE, shell=True)
     time.sleep(3)
     show_interface_ip(name)
 
 
+def user_input(name):
+    """
+    定义用户输入信息，返回给修改IP。
+    :param name:
+    """
+    change_interface_ip(name,
+                        click.prompt("请输入IP：", default="192.168.1.233"),
+                        click.prompt("请输入Mask：", default="255.255.255.0"),
+                        click.prompt("请输入Gateway：", default="192.168.1.1"),
+                        click.prompt("请输入DNS：", default="114.114.114.114 8.8.8.8"))
+
+
+def user_input_me(name_input_str):
+    """
+    自己使用 预定义了4个列表分别存储 掩码，网关，DNS、
+    :param name_input_str:
+    """
+    for i in ["【1】公司\t[CN]","【2】公司\t[GFW]","【3】家庭\t[CN]","【4】家庭\t[GFW]","【0】退出\t[out]"]:
+        print(i)
+    user_c_str = input("请选择： ")
+    if user_c_str == "1":
+        change_interface_ip(interface_list[name_input_str],
+                            click.prompt("请输入IP：", default="192.168.101.233"),
+                            com_ip_list1[0],
+                            com_ip_list1[1],
+                            com_ip_list1[2])
+
+    elif user_c_str == "2":
+        change_interface_ip(interface_list[name_input_str],
+                            click.prompt("请输入IP：", default="192.168.101.233"),
+                            com_ip_list2[0],
+                            com_ip_list2[1],
+                            com_ip_list2[2])
+
+    elif user_c_str == "3":
+        change_interface_ip(interface_list[name_input_str],
+                            click.prompt("请输入IP：", default="172.16.168.73"),
+                            home_ip_list3[0],
+                            home_ip_list3[1],
+                            home_ip_list3[2])
+
+    elif user_c_str == "4":
+        change_interface_ip(interface_list[name_input_str],
+                            click.prompt("请输入IP：", default="172.16.168.73"),
+                            home_ip_list254[0],
+                            home_ip_list254[1],
+                            home_ip_list254[2])
+
+
 def action():
     """
-    需要执行的动作，选择网卡，DHCP获取,手动配置。
+    需要执行的动作，选择网卡,手动配置。
     """
     print("请选择您要操作的网卡：".center(50, "="))
     name_input_str = int(input("请输入网卡序号："))
 
     if len(interface_list) > 0:
-        user_c_str = input("是否显示当前网卡配置信息y/n: ")
-
+        show_interface_ip(interface_list[name_input_str])
+        user_c_str = input("是否修改y/n: ")
         if user_c_str == "y":
-            show_interface_ip(interface_list[name_input_str])
-            user_c_str = input("是否修改y/n: ")
-            if user_c_str == "y":
-                user_c_str = input("【1】DHCP 【2】手动添加【0】退出 : ")
-                if user_c_str == "1":
-                    change_interface_dhcp(interface_list[name_input_str])
-                elif user_c_str == "2":
-                    change_interface_ip(interface_list[name_input_str],
-                                        click.prompt("请输入IP：", default="192.168.1.233"),
-                                        click.prompt("请输入Mask：", default="255.255.255.0"),
-                                        click.prompt("请输入Gateway：", default="192.168.1.1"),
-                                        click.prompt("请输入DNS：", default="114.114.114.114 8.8.8.8"))
-
-        elif user_c_str == "n":
-            user_c_str = input("【1】DHCP 【2】手动添加【0】退出 : ")
-
-            if user_c_str == "1":
-                change_interface_dhcp(interface_list[name_input_str])
-
-            elif user_c_str == "2":
-                change_interface_ip(interface_list[name_input_str],
-                                    click.prompt("请输入IP：", default="192.168.1.233"),
-                                    click.prompt("请输入Mask：", default="255.255.255.0"),
-                                    click.prompt("请输入Gateway：", default="192.168.1.1"),
-                                    click.prompt("请输入DNS：", default="114.114.114.114 8.8.8.8"))
-
+            user_input(interface_list[name_input_str])
     else:
         print("输入错误，请从新输入： ")
 
 
 def action_me():
     """
-    需要执行的动作，选择网卡，DHCP获取,手动配置。
+    定义了定制动作中的设置。
     """
     print("请选择您要操作的网卡：".center(50, "="))
     name_input_str = int(input("请输入网卡序号："))
 
     if len(interface_list) > 0:
-        user_c_str = input("是否显示当前网卡配置信息y/n: ")
-
+        show_interface_ip(interface_list[name_input_str])
+        user_c_str = input("是否修改y/n: ")
         if user_c_str == "y":
-            show_interface_ip(interface_list[name_input_str])
-            user_c_str = input("是否修改y/n: ")
-            if user_c_str == "y":
-                user_c_str = input("【1】公司 【2】家庭【0】退出 : ")
-                if user_c_str == "1":
-                    user_c_str = input("【1】Gateway1 【2】Gateway2【3】DHCP【0】退出 : ")
-                    if user_c_str == "1":
-                        change_interface_ip(interface_list[name_input_str],
-                                            click.prompt("请输入IP：", default="192.168.101.233"),
-                                            com_ip_list1[0],
-                                            com_ip_list1[1],
-                                            com_ip_list1[2])
-
-                    elif user_c_str == "2":
-                        change_interface_ip(interface_list[name_input_str],
-                                            click.prompt("请输入IP：", default="192.168.101.233"),
-                                            com_ip_list2[0],
-                                            com_ip_list2[1],
-                                            com_ip_list2[2])
-
-                    elif user_c_str == "3":
-                        change_interface_dhcp(interface_list[name_input_str])
+            user_input_me(name_input_str)
 
 
-                elif user_c_str == "2":
-                    user_c_str = input("【1】Gateway254 【2】Gateway3【3】DHCP【0】退出 : ")
-                    if user_c_str == "1":
-                        change_interface_ip(interface_list[name_input_str],
-                                            click.prompt("请输入IP：", default="172.16.168.73"),
-                                            home_ip_list254[0],
-                                            home_ip_list254[1],
-                                            home_ip_list254[2])
 
-                    elif user_c_str == "2":
-                        change_interface_ip(interface_list[name_input_str],
-                                            click.prompt("请输入IP：", default="172.16.168.73"),
-                                            home_ip_list3[0],
-                                            home_ip_list3[1],
-                                            home_ip_list3[2])
-
-                    elif user_c_str == "3":
-                        change_interface_dhcp(interface_list[name_input_str])
-
-
-        elif user_c_str == "n":
-
-            user_c_str = input("【1】公司 【2】家庭【0】退出 : ")
-
-            if user_c_str == "1":
-                user_c_str = input("【1】Gateway1【2】Gateway2【3】DHCP【0】退出 : ")
-                if user_c_str == "1":
-                    change_interface_ip(interface_list[name_input_str],
-                                        click.prompt("请输入IP：", default="192.168.101.233"),
-                                        com_ip_list1[0],
-                                        com_ip_list1[1],
-                                        com_ip_list1[2])
-
-                elif user_c_str == "2":
-                    change_interface_ip(interface_list[name_input_str],
-                                        click.prompt("请输入IP：", default="192.168.101.233"),
-                                        com_ip_list2[0],
-                                        com_ip_list2[1],
-                                        com_ip_list2[2])
-
-                elif user_c_str == "3":
-                    change_interface_dhcp(interface_list[name_input_str])
-
-            elif user_c_str == "2":
-                user_c_str = input("【1】Gateway254【2】Gateway3【3】DHCP【0】退出 : ")
-                if user_c_str == "1":
-                    change_interface_ip(interface_list[name_input_str],
-                                        click.prompt("请输入IP：", default="172.16.168.73"),
-                                        home_ip_list254[0],
-                                        home_ip_list254[1],
-                                        home_ip_list254[2])
-
-                elif user_c_str == "2":
-                    change_interface_ip(interface_list[name_input_str],
-                                        click.prompt("请输入IP：", default="172.16.168.73"),
-                                        home_ip_list3[0],
-                                        home_ip_list3[1],
-                                        home_ip_list3[2])
-
-                elif user_c_str == "3":
-                    change_interface_dhcp(interface_list[name_input_str])
 
     else:
         print("输入错误，请从新输入： ")
 
 
 def action_dhcp():
+    """
+    设置自动获取。
+    """
     print("请选择您要操作的网卡：".center(50, "="))
     name_input_str = int(input("请输入网卡序号："))
 
