@@ -109,7 +109,9 @@ def user_input_me(name_input_str):
     """
     for i in ["【1】公司\t[CN]","【2】公司\t[GFW]","【3】家庭\t[CN]","【4】家庭\t[GFW]","【0】退出\t[out]"]:
         print(i)
+
     user_c_str = input("请选择： ")
+
     if user_c_str == "1":
         change_interface_ip(interface_list[name_input_str],
                             click.prompt("请输入IP：", default="192.168.101.233"),
@@ -151,6 +153,7 @@ def action():
         user_c_str = input("是否修改y/n: ")
         if user_c_str == "y":
             user_input(interface_list[name_input_str])
+
     else:
         print("输入错误，请从新输入： ")
 
@@ -167,9 +170,6 @@ def action_me():
         user_c_str = input("是否修改y/n: ")
         if user_c_str == "y":
             user_input_me(name_input_str)
-
-
-
 
     else:
         print("输入错误，请从新输入： ")
