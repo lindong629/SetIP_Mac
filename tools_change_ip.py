@@ -36,8 +36,8 @@ def show_interface_list():
     network_name_str = str(show_interface_str.communicate()[0], encoding="utf8")
     network_name_str_list = network_name_str.rstrip().split("\n")
     for i in network_name_str_list:
-        if i not in interface_list:
-            interface_list.append(i)
+        if ("'%s'" % i) not in interface_list:
+            interface_list.append(("'%s'") % i)
     print("网卡信息如下：".center(50, "="))
     print("序号\t\t名称")
 
