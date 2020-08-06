@@ -31,7 +31,7 @@ def show_interface_list():
     2、network_name_str 结果由二进制转换为str
     3、network_name_str_list 分割字符串以循环打印
     """
-    show_interface_str = Popen("networksetup -listallnetworkservices | awk 'NR == 1 {next} {print $1}'",
+    show_interface_str = Popen("networksetup -listallnetworkservices | awk 'NR == 1 {next} {print $0}'",
                                stdin=None, stdout=PIPE, shell=True)
     network_name_str = str(show_interface_str.communicate()[0], encoding="utf8")
     network_name_str_list = network_name_str.rstrip().split("\n")
