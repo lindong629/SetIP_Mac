@@ -1,4 +1,4 @@
-#!/usr/local/bin/python3
+#!/usr/bin/env python 
 # -*- coding: utf-8 -*- 
 # Jimmy Lin
 import tools_change_ip

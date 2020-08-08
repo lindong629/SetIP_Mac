@@ -13,7 +13,7 @@ pip3 install click
 ```shell
 #!/bin/bash
 cd /Users/***/PycharmProjects/change_mac_ip/
-./main.py
+python3 main.py
 ```
 
 
