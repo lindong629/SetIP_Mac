@@ -1,12 +1,14 @@
 #!/usr/bin/env python 
 # -*- coding: utf-8 -*- 
 # Jimmy Lin
+
 import os
 import time
 import click
 from subprocess import Popen, PIPE, call
 
 interface_list = []
+gl_IP = None
 com_ip_list1 = ["255.255.255.0", "192.168.101.1", "114.114.114.114 8.8.8.8"]
 com_ip_list2 = ["255.255.255.0", "192.168.101.2", "192.168.101.2"]
 home_ip_list3 = ["255.255.255.0", "172.16.168.3", "114.114.114.114 8.8.8.8"]
@@ -62,6 +64,11 @@ def show_interface_ip(interface_name):
     print(network_ip_str)
     print("您的【%s】网卡DNS Server如下：".center(50, "=") % interface_name)
     print(network_dn_str)
+    ip_list = network_ip_str.rstrip().split("\n")
+    for line in ip_list:
+        if line.startswith("IP address:"):
+            global gl_IP
+            gl_IP = line.strip().replace("IP address: ", "")
 
 
 def change_interface_ip(name, ip, netmask, gateway, dns):
@@ -86,7 +93,7 @@ def change_interface_dhcp(name):
                        stdin=None, stdout=PIPE, shell=True)
     Popen("networksetup -setdnsservers %s empty" % name,
                         stdin=None, stdout=PIPE, shell=True)
-    time.sleep(3)
+    time.sleep(5)
     show_interface_ip(name)
 
 
@@ -128,14 +135,14 @@ def user_input_me(name_input_str):
 
     elif user_c_str == "3":
         change_interface_ip(interface_list[name_input_str],
-                            click.prompt("请输入IP：", default="172.16.168.73"),
+                            click.prompt("请输入IP：", default=gl_IP),
                             home_ip_list3[0],
                             home_ip_list3[1],
                             home_ip_list3[2])
 
     elif user_c_str == "4":
         change_interface_ip(interface_list[name_input_str],
-                            click.prompt("请输入IP：", default="172.16.168.73"),
+                            click.prompt("请输入IP：", default=gl_IP),
                             home_ip_list254[0],
                             home_ip_list254[1],
                             home_ip_list254[2])
