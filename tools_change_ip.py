@@ -9,8 +9,8 @@ from subprocess import Popen, PIPE, call
 
 interface_list = []
 gl_IP = None
-com_ip_list1 = ["255.255.255.0", "192.168.101.1", "114.114.114.114 8.8.8.8"]
-com_ip_list2 = ["255.255.255.0", "192.168.101.2", "192.168.101.2"]
+com_ip_list1 = ["255.255.255.0", "192.168.101.1", "114.114.114.114 8.8.8.8", "buyabs.corp"]
+com_ip_list2 = ["255.255.255.0", "192.168.101.2", "192.168.101.2", "buyabs.corp"]
 home_ip_list3 = ["255.255.255.0", "172.16.168.3", "114.114.114.114 8.8.8.8"]
 home_ip_list254 = ["255.255.255.0", "172.16.168.254", "172.16.168.254"]
 
@@ -84,6 +84,15 @@ def change_interface_ip(name, ip, netmask, gateway, dns):
     show_interface_ip(name)
 
 
+def change_searchdomains(name, doman):
+    """修改网卡信息
+
+    :return:
+    """
+    Popen("networksetup -setsearchdomains %s %s" % (name, doman),
+                       stdin=None, stdout=PIPE, shell=True)
+
+
 def change_interface_dhcp(name):
     """设置网卡IP自动获取
 
@@ -125,6 +134,7 @@ def user_input_me(name_input_str):
                             com_ip_list1[0],
                             com_ip_list1[1],
                             com_ip_list1[2])
+        change_searchdomains(interface_list[name_input_str], com_ip_list1[3])
 
     elif user_c_str == "2":
         change_interface_ip(interface_list[name_input_str],
@@ -132,6 +142,7 @@ def user_input_me(name_input_str):
                             com_ip_list2[0],
                             com_ip_list2[1],
                             com_ip_list2[2])
+        change_searchdomains(interface_list[name_input_str], com_ip_list2[3])
 
     elif user_c_str == "3":
         change_interface_ip(interface_list[name_input_str],
