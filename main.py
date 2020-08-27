@@ -26,7 +26,7 @@ def main():
             tools_change_ip.show_interface_list()
             tools_change_ip.action_dhcp()
 
-        elif action == "0":
+        elif action == "q" or action == "Q":
             print("欢迎再次使用【IP管理系统】")
             break
 

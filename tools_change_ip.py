@@ -21,7 +21,7 @@ def show_menu():
     :return:
     """
     print("欢迎使用IP管理系统For MacOS".center(50, "-"))
-    for i in ["1、手动配置", "2、定制设置", "3、自动获取", "0、退出系统"]:
+    for i in ["1、手动配置", "2、定制设置", "3、自动获取", "q、退出系统"]:
         print(i)
     print("当前版本V1.0 by Python3".center(50, "-"))
     print("博客 https://blog.rtwork.win ".center(50, "-"))
