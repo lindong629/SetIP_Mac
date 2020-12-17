@@ -10,9 +10,11 @@ from subprocess import Popen, PIPE, call
 interface_list = []
 gl_IP = None
 com_ip_list1 = ["255.255.255.0", "192.168.101.1", "114.114.114.114 8.8.8.8", "buyabs.corp"]
-com_ip_list2 = ["255.255.255.0", "192.168.101.2", "192.168.101.2", "buyabs.corp"]
+com_ip_list2 = ["255.255.255.0", "192.168.101.1", "192.168.168.254 122.51.145.229 8.8.8.8", "buyabs.corp"]
 home_ip_list3 = ["255.255.255.0", "192.168.168.3", "114.114.114.114 8.8.8.8"]
-home_ip_list254 = ["255.255.255.0", "192.168.168.254", "192.168.168.254"]
+home_ip_list254 = ["255.255.255.0", "192.168.168.253", "192.168.168.254 192.168.168.3 192.168.168.1", "buyabs.corp"]
+url_list = ["https://www.wlgo.cc","https://cdn.jsdelivr.net/gh/lindong629/bloghtml@master/js/letgo.js",
+            "https://raw.githubusercontent.com/lindong629/bloghtml/master/js/letgo.js"]
 
 
 def show_menu():
@@ -21,7 +23,7 @@ def show_menu():
     :return:
     """
     print("欢迎使用IP管理系统For MacOS".center(50, "-"))
-    for i in ["1、手动配置", "2、定制设置", "3、自动获取", "q、退出系统"]:
+    for i in ["1、手动配置", "2、定制设置", "3、自动获取", "4、设置代理", "q、退出系统"]:
         print(i)
     print("当前版本V1.0 by Python3".center(50, "-"))
     print("博客 https://blog.rtwork.win ".center(50, "-"))
@@ -39,7 +41,7 @@ def show_interface_list():
     network_name_str_list = network_name_str.rstrip().split("\n")
     for i in network_name_str_list:
         if ("'%s'" % i) not in interface_list:
-            interface_list.append(("'%s'") % i)
+            interface_list.append("'%s'" % i)
     print("网卡信息如下：".center(50, "="))
     print("序号\t\t名称")
 
@@ -58,12 +60,22 @@ def show_interface_ip(interface_name):
                                   stdin=None, stdout=PIPE, shell=True)
     show_interface_dns_str = Popen("networksetup -getdnsservers %s" % interface_name,
                                    stdin=None, stdout=PIPE, shell=True)
+    show_interface_proxy_str = Popen("networksetup -getautoproxyurl %s" % interface_name,
+                                     stdin=None, stdout=PIPE, shell=True)
+    show_interface_searchdomains_str = Popen("networksetup -getsearchdomains %s" % interface_name,
+                                     stdin=None, stdout=PIPE, shell=True)
     network_ip_str = str(show_interface_ip_str.communicate()[0], encoding="utf8")
     network_dn_str = str(show_interface_dns_str.communicate()[0], encoding="utf8")
+    network_proxy_str = str(show_interface_proxy_str.communicate()[0], encoding="utf8")
+    network_searchdomains_str = str(show_interface_searchdomains_str.communicate()[0], encoding="utf8")
     print("您的【%s】网卡IP如下：".center(50, "=") % interface_name)
     print(network_ip_str)
     print("您的【%s】网卡DNS Server如下：".center(50, "=") % interface_name)
     print(network_dn_str)
+    print("您的【%s】网卡代理配置如下：".center(50, "=") % interface_name)
+    print(network_proxy_str)
+    print("您的【%s】SearchDomains如下：".center(50, "=") % interface_name)
+    print(network_searchdomains_str)
     ip_list = network_ip_str.rstrip().split("\n")
     for line in ip_list:
         if line.startswith("IP address:"):
@@ -77,9 +89,9 @@ def change_interface_ip(name, ip, netmask, gateway, dns):
     :return:
     """
     Popen("networksetup -setmanual %s %s %s %s" % (name, ip, netmask, gateway),
-                       stdin=None, stdout=PIPE, shell=True)
+          stdin=None, stdout=PIPE, shell=True)
     Popen("networksetup -setdnsservers %s %s" % (name, dns),
-                        stdin=None, stdout=PIPE, shell=True)
+          stdin=None, stdout=PIPE, shell=True)
     time.sleep(3)
     show_interface_ip(name)
 
@@ -90,7 +102,7 @@ def change_searchdomains(name, doman):
     :return:
     """
     Popen("networksetup -setsearchdomains %s %s" % (name, doman),
-                       stdin=None, stdout=PIPE, shell=True)
+          stdin=None, stdout=PIPE, shell=True)
 
 
 def change_interface_dhcp(name):
@@ -99,9 +111,17 @@ def change_interface_dhcp(name):
     :return:
     """
     Popen("networksetup -setdhcp %s" % name,
-                       stdin=None, stdout=PIPE, shell=True)
+          stdin=None, stdout=PIPE, shell=True)
     Popen("networksetup -setdnsservers %s empty" % name,
-                        stdin=None, stdout=PIPE, shell=True)
+          stdin=None, stdout=PIPE, shell=True)
+    time.sleep(5)
+    show_interface_ip(name)
+
+
+def change_proxy(name, url):
+    """设置自动代理"""
+    Popen("networksetup -setautoproxyurl %s %s" % (name, url),
+          stdin=None, stdout=PIPE, shell=True)
     time.sleep(5)
     show_interface_ip(name)
 
@@ -123,7 +143,7 @@ def user_input_me(name_input_str):
     自己使用 预定义了4个列表分别存储 掩码，网关，DNS、
     :param name_input_str:
     """
-    for i in ["【1】公司\t[CN]","【2】公司\t[GFW]","【3】家庭\t[CN]","【4】家庭\t[GFW]","【0】退出\t[out]"]:
+    for i in ["【1】公司\t[CN]", "【2】公司\t[GFW]", "【3】家庭\t[CN]", "【4】家庭\t[GFW]", "【0】退出\t[out]"]:
         print(i)
 
     user_c_str = input("请选择： ")
@@ -202,6 +222,19 @@ def action_dhcp():
 
     if len(interface_list) > 0:
         change_interface_dhcp(interface_list[name_input_str])
+
+    else:
+        print("不存在网卡信息，请核对： ")
+
+
+def action_proxy():
+    """设置url自动代理"""
+    print("请选择您要操作的网卡:".center(50, "="))
+    name_input_str = int(input("请输入网卡序号："))
+    print("请选择代理链接: [1]CDN [2]直连：".center(50, "="))
+    url = int(input("请输入序号："))
+    if len(interface_list) > 0:
+        change_proxy(interface_list[name_input_str], url_list[url])
 
     else:
         print("不存在网卡信息，请核对： ")
