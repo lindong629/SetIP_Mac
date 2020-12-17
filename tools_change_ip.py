@@ -13,7 +13,7 @@ com_ip_list1 = ["255.255.255.0", "192.168.101.1", "114.114.114.114 8.8.8.8", "bu
 com_ip_list2 = ["255.255.255.0", "192.168.101.1", "192.168.168.254 122.51.145.229 8.8.8.8", "buyabs.corp"]
 home_ip_list3 = ["255.255.255.0", "192.168.168.3", "114.114.114.114 8.8.8.8"]
 home_ip_list254 = ["255.255.255.0", "192.168.168.253", "192.168.168.254 192.168.168.3 192.168.168.1", "buyabs.corp"]
-url_list = ["https://www.wlgo.cc","https://cdn.jsdelivr.net/gh/lindong629/bloghtml@master/js/letgo.js",
+url_list = ["https://www.wlgo.cc","https://cdn.jsdelivr.net/gh/lindong629/bloghtml@latest/js/letgo.js",
             "https://raw.githubusercontent.com/lindong629/bloghtml/master/js/letgo.js"]
 
 
@@ -232,7 +232,7 @@ def action_proxy():
     print("请选择您要操作的网卡:".center(50, "="))
     name_input_str = int(input("请输入网卡序号："))
     print("请选择代理链接: [1]CDN [2]直连：".center(50, "="))
-    url = int(input("请输入序号："))
+    url = int(input("请输入代理序号："))
     if len(interface_list) > 0:
         change_proxy(interface_list[name_input_str], url_list[url])
 
