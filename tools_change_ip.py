@@ -96,12 +96,12 @@ def change_interface_ip(name, ip, netmask, gateway, dns):
     show_interface_ip(name)
 
 
-def change_searchdomains(name, doman):
+def change_search_domains(name, domain):
     """修改网卡信息
 
     :return:
     """
-    Popen("networksetup -setsearchdomains %s %s" % (name, doman),
+    Popen("networksetup -setsearchdomains %s %s" % (name, domain),
           stdin=None, stdout=PIPE, shell=True)
 
 
@@ -154,7 +154,7 @@ def user_input_me(name_input_str):
                             com_ip_list1[0],
                             com_ip_list1[1],
                             com_ip_list1[2])
-        change_searchdomains(interface_list[name_input_str], com_ip_list1[3])
+        change_search_domains(interface_list[name_input_str], com_ip_list1[3])
 
     elif user_c_str == "2":
         change_interface_ip(interface_list[name_input_str],
@@ -162,7 +162,7 @@ def user_input_me(name_input_str):
                             com_ip_list2[0],
                             com_ip_list2[1],
                             com_ip_list2[2])
-        change_searchdomains(interface_list[name_input_str], com_ip_list2[3])
+        change_search_domains(interface_list[name_input_str], com_ip_list2[3])
 
     elif user_c_str == "3":
         change_interface_ip(interface_list[name_input_str],
