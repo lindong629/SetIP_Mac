@@ -1,0 +1,4 @@
+#!/bin/bash
+# SetIP.app 启动器：用 open 方式在终端打开，只弹一个窗口
+DIR="$(cd "$(dirname "$0")" && pwd)"
+open -a Terminal "$DIR/setip.command"
