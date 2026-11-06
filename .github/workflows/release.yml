@@ -97,9 +97,10 @@ jobs:
           path: release
 
       - name: Create Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}   # release job 未 checkout，需显式指定仓库
-        run: gh release create "${GITHUB_REF_NAME}" \
-               release/SetIP-windows.zip release/SetIP-macOS.zip \
-               --title "SetIP ${GITHUB_REF_NAME}" --generate-notes
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/SetIP-windows.zip
+            release/SetIP-macOS.zip
+          name: SetIP ${{ github.ref_name }}
+          generate_release_notes: true
