@@ -1,5 +1,11 @@
 /__pycache__/*
 /venv/
+/.build-venv/
+/build/
+/dist/
 !.gitignore
 .DS_Store
 .idea
+/windows/__pycache__/
+/build/
+/dist/
