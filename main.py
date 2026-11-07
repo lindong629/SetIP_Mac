@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import time
+import unicodedata
 
 try:
     import yaml
@@ -16,6 +17,122 @@ except ImportError:
     sys.exit(1)
 
 APP_NAME = "IP 管理器 SetIP"
+RULE = "─" * 54
+
+
+# ------------------------------------------------------------ 终端配色排版 --
+
+class Style:
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    BLUE = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN = "\033[36m"
+    GREY = "\033[90m"
+
+
+def _enable_windows_ansi():
+    """Windows 10+ 控制台开启 ANSI 转义支持"""
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)            # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
+    except Exception:
+        return False
+
+
+def _detect_color():
+    """SETIP_COLOR=always / never 可强制开关；默认跟随终端能力"""
+    env = os.environ.get("SETIP_COLOR", "").strip().lower()
+    if env in ("always", "1", "true", "yes", "on"):
+        return True
+    if env in ("never", "0", "false", "no", "off") or "NO_COLOR" in os.environ:
+        return False
+    if not sys.stdout.isatty():
+        return False
+    if os.name == "nt":
+        return _enable_windows_ansi()
+    return os.environ.get("TERM", "") != "dumb"
+
+
+USE_COLOR = _detect_color()
+
+
+def c(text, *styles):
+    """给文本加颜色/样式；未启用颜色时原样返回"""
+    if not USE_COLOR or not styles:
+        return str(text)
+    return "".join(styles) + str(text) + Style.RESET
+
+
+def dlen(text):
+    """按终端显示宽度计长度（中日韩字符按 2 计）"""
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+               for ch in str(text))
+
+
+def pad(text, width):
+    text = str(text)
+    return text + " " * max(0, width - dlen(text))
+
+
+def row(label, value, label_width=12, value_style=None, label_style=Style.GREY):
+    """对齐的一行「标签 + 值」"""
+    shown = c(value, value_style) if value_style else str(value)
+    print("  %s %s" % (c(pad(label, label_width), label_style), shown))
+
+
+def info(msg):
+    print("  " + msg)
+
+
+def step(msg):
+    print(c("  ▸ " + msg + " ...", Style.BLUE))
+
+
+def hint(msg):
+    print(c("  " + msg, Style.DIM))
+
+
+def warn(msg):
+    print(c("  ⚠ " + msg, Style.YELLOW))
+
+
+def error(msg):
+    print(c("  ✗ " + msg, Style.RED))
+
+
+def success(msg):
+    print(c("  ✓ " + msg, Style.GREEN))
+
+
+def section(title, style=Style.CYAN):
+    print(c(RULE, Style.GREY))
+    print(c(" " + title, Style.BOLD, style))
+
+
+def print_caption(title, note=""):
+    print(c("  " + title, Style.BOLD, Style.CYAN)
+          + (c("   " + note, Style.DIM) if note else ""))
+
+
+def menu_item(key, label, key_style=Style.CYAN):
+    print("  %s %s" % (c(pad(key, 2), Style.BOLD, key_style), label))
+
+
+def banner(subtitle=""):
+    print(c("═" * 54, Style.CYAN))
+    print(c("  " + APP_NAME, Style.BOLD, Style.CYAN)
+          + (c("   " + subtitle, Style.DIM) if subtitle else ""))
+    print(c("═" * 54, Style.CYAN))
 
 # ---------------------------------------------------------------- 配置文件 --
 
@@ -81,11 +198,11 @@ def get_config_path():
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(CONFIG_TEMPLATE)
-            print(">> 未找到配置文件，已自动生成模板: %s" % path)
+            success("未找到配置文件，已自动生成模板: %s" % path)
             return path
         except OSError:
             continue
-    print(">> 错误：无法创建配置文件")
+    error("无法创建配置文件")
     sys.exit(1)
 
 
@@ -119,18 +236,18 @@ def load_config(path):
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
     except yaml.YAMLError as e:
-        print(">> 配置文件 YAML 格式有误，请检查: %s\n%s" % (path, e))
+        error("配置文件 YAML 格式有误，请检查: %s\n%s" % (path, e))
         sys.exit(1)
 
     profiles = {}
     for key in ("company", "home"):
         item = data.get(key)
         if not isinstance(item, dict):
-            print('>> 配置文件缺少 "%s" 配置段，请检查 %s' % (key, path))
+            error('配置文件缺少 "%s" 配置段，请检查 %s' % (key, path))
             sys.exit(1)
         missing = [k for k in ("ip", "netmask", "gateway", "dns") if not item.get(k)]
         if key == "company" and missing:
-            print('>> "%s" 缺少字段: %s，请检查配置文件' % (key, ", ".join(missing)))
+            error('"%s" 缺少字段: %s，请检查配置文件' % (key, ", ".join(missing)))
             sys.exit(1)
         profiles[key] = {
             "ip": str(item.get("ip", "")),
@@ -167,16 +284,24 @@ def list_services():
 
 def show_info(service):
     """显示当前网卡信息"""
-    print("=" * 50)
-    print("【%s】当前配置：" % service)
-    print(run_cmd(["networksetup", "-getinfo", service]))
-    print("-" * 50)
-    print("DNS: %s" % (" ".join(get_dns_list(service)) or "（未设置）"))
-    print("搜索域: %s" % (" ".join(get_search_domains(service)) or "（未设置）"))
+    info_text = run_cmd(["networksetup", "-getinfo", service])
+    section("当前网络配置 · %s" % service)
+    for line in info_text.splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            row(key.strip(), value.strip() or c("（空）", Style.DIM), 18)
+        else:
+            print(c("  " + line.strip(), Style.DIM))
+
+    row("DNS", " ".join(get_dns_list(service)) or c("（未设置）", Style.DIM), 18)
+    row("搜索域", " ".join(get_search_domains(service)) or c("（未设置）", Style.DIM), 18)
     enabled, url = get_pac_state(service)
-    print("PAC代理: %s%s" % ("已启用 -> %s" % url if enabled else "已关闭",
-                             "" if enabled or not url else "（残留链接: %s）" % url))
-    print("=" * 50)
+    if enabled:
+        row("PAC 代理", c("已启用", Style.GREEN, Style.BOLD) + "  →  " + url, 18)
+    else:
+        tail = c("（残留链接 %s）" % url, Style.DIM) if url else ""
+        row("PAC 代理", c("已关闭", Style.DIM) + tail, 18)
+    print(c(RULE, Style.GREY))
 
 
 def parse_getinfo(info, label):
@@ -211,41 +336,47 @@ def get_pac_state(service):
     for line in out.splitlines():
         if line.startswith("URL:"):
             url = line.split(":", 1)[1].strip()
+    if url in ("(null)", "None"):
+        url = ""
     return enabled, url
 
 
 def report(checks):
     """打印应用情况校验结果，checks 为 [(名称, 实际值, 期望值), ...]"""
-    print("-" * 50)
-    print("应用情况：")
+    section("应用情况")
     all_ok = True
     for name, actual, expect in checks:
         ok = (actual == expect)
         all_ok = all_ok and ok
         if ok:
-            print("  ✓ %s: %s" % (name, actual))
+            print("  %s %s %s" % (c("✓", Style.GREEN, Style.BOLD),
+                                  c(pad(name, 10), Style.GREY),
+                                  c(actual, Style.BOLD)))
         else:
-            print("  ✗ %s: 实际 %s / 期望 %s" % (name, actual or "（空）", expect))
+            print("  %s %s 实际 %s / 期望 %s" % (
+                c("✗", Style.RED, Style.BOLD), c(pad(name, 10), Style.GREY),
+                c(actual or "（空）", Style.RED), c(expect, Style.GREEN)))
     if all_ok:
-        print(">> 全部生效")
+        print(c("  ✓ 全部生效", Style.GREEN, Style.BOLD))
     else:
-        print(">> 存在未生效项！请稍后重试；反复失败请检查是否需要管理员权限")
-    print("=" * 50)
+        print(c("  ⚠ 存在未生效项！请稍后重试；反复失败请检查是否需要管理员权限",
+                Style.YELLOW, Style.BOLD))
+    print(c(RULE, Style.GREY))
 
 
 def apply_manual(service, ip, netmask, gateway, dns_list, search_domains):
     """设置为手动 IP。search_domains 为空列表时清除搜索域设置。"""
-    print(">> 正在设置 IP ...")
+    step("正在设置 IP")
     out = run_cmd(["networksetup", "-setmanual", service, ip, netmask, gateway])
     if out:
         print(out)
 
-    print(">> 正在设置 DNS ...")
+    step("正在设置 DNS")
     out = run_cmd(["networksetup", "-setdnsservers", service] + (dns_list or ["empty"]))
     if out:
         print(out)
 
-    print(">> 正在设置搜索域 ...")
+    step("正在设置搜索域")
     out = run_cmd(["networksetup", "-setsearchdomains", service] + (search_domains or ["Empty"]))
     if out:
         print(out)
@@ -264,7 +395,8 @@ def apply_manual(service, ip, netmask, gateway, dns_list, search_domains):
 
 def apply_pac(service, url):
     """启用 PAC 自动代理"""
-    print(">> 正在设置 PAC 代理: %s" % url)
+    step("正在设置 PAC 代理")
+    hint(url)
     out = run_cmd(["networksetup", "-setautoproxyurl", service, url])
     if out:
         print(out)
@@ -279,7 +411,7 @@ def apply_pac(service, url):
 
 def apply_pac_off(service):
     """关闭 PAC 自动代理"""
-    print(">> 正在关闭 PAC 代理 ...")
+    step("正在关闭 PAC 代理")
     out = run_cmd(["networksetup", "-setautoproxystate", service, "off"])
     if out:
         print(out)
@@ -290,12 +422,12 @@ def apply_pac_off(service):
         ("PAC 代理", "已启用" if enabled else "已关闭", "已关闭"),
     ])
     if actual_url:
-        print("  （代理链接 %s 已保留，但处于关闭状态）" % actual_url)
+        hint("代理链接 %s 已保留，但处于关闭状态" % actual_url)
 
 
 def apply_dhcp(service):
     """设置为 DHCP 自动获取，并清除 DNS / 搜索域的手动设置"""
-    print(">> 正在切换为 DHCP 自动获取 ...")
+    step("正在切换为 DHCP 自动获取")
     out = run_cmd(["networksetup", "-setdhcp", service])
     if out:
         print(out)
@@ -316,64 +448,66 @@ def apply_dhcp(service):
 # ---------------------------------------------------------------- 交互 UI --
 
 def print_config_items():
-    print("  ── 修改配置 ──")
-    print("  5、修改公司配置")
-    print("  6、修改家里配置")
-    print("  7、修改 PAC 代理链接")
-    print("  8、打开配置文件")
+    print(c("  ── 修改配置 " + "─" * 40, Style.GREY))
+    menu_item("5", "修改公司配置", Style.BLUE)
+    menu_item("6", "修改家里配置", Style.BLUE)
+    menu_item("7", "修改 PAC 代理链接", Style.BLUE)
+    menu_item("8", "打开配置文件", Style.BLUE)
 
 
 def config_summary(profiles):
     """列出当前配置，方便在选网卡前确认参数"""
-    c, h, proxy = profiles["company"], profiles["home"], profiles["proxy"]
-    print("当前配置：")
-    print("  公司: %s/%s  网关 %s  DNS %s  搜索域 %s" % (
-        c["ip"] or "空", c["netmask"] or "空", c["gateway"] or "空",
-        " ".join(c["dns"]) or "无", " ".join(c["search_domains"]) or "无"))
-    print("  家里: %s/%s  网关 %s  DNS %s  搜索域 %s" % (
-        h["ip"] or "空", h["netmask"] or "空", h["gateway"] or "空",
-        " ".join(h["dns"]) or "无", " ".join(h["search_domains"]) or "无"))
-    print("  PAC:  WAN %s" % (proxy["wan"] or "未配置"))
-    print("        LAN %s" % (proxy["lan"] or "未配置"))
+    company, home, proxy = profiles["company"], profiles["home"], profiles["proxy"]
+    section("当前配置")
+    for label, p, color in (("公司", company, Style.GREEN), ("家里", home, Style.CYAN)):
+        print("  %s  %s" % (c(label, Style.BOLD, color),
+                            c("%s / %s" % (p["ip"] or "空", p["netmask"] or "空"), Style.BOLD)))
+        parts = [c("网关", Style.GREY), p["gateway"] or "空",
+                 c("DNS", Style.GREY), " ".join(p["dns"]) or "无"]
+        if p["search_domains"]:
+            parts += [c("搜索域", Style.GREY), " ".join(p["search_domains"])]
+        print("        " + "  ".join(parts))
+    print("  %s  %s %s" % (c("PAC", Style.BOLD, Style.MAGENTA),
+                           c("WAN", Style.GREY), proxy["wan"] or c("未配置", Style.DIM)))
+    print("        %s %s" % (c("LAN", Style.GREY), proxy["lan"] or c("未配置", Style.DIM)))
 
 
 def choose_service(profiles):
     """选择网卡。返回 ("run", 网卡名) / ("edit", c/h/p/o) / ("quit", None)"""
     services = list_services()
     if not services:
-        print(">> 未找到任何网络服务，请检查系统设置")
+        error("未找到任何网络服务，请检查系统设置")
         sys.exit(1)
 
-    print("可操作的网卡：")
+    section("可操作的网卡")
     for i, name in enumerate(services):
-        print("  [%d] %s" % (i, name))
+        print("  %s %s" % (c(pad("[%d]" % i, 3), Style.BOLD, Style.CYAN), name))
+
     print("")
     config_summary(profiles)
-    print("\n也可以直接在这里改配置：")
-    print("  c、修改公司配置    h、修改家里配置")
-    print("  p、修改 PAC 链接   o、打开配置文件")
+
+    print(c(RULE, Style.GREY))
+    print("  %s 改公司配置   %s 改家里配置   %s 改 PAC 链接   %s 打开配置文件" % (
+        c("c", Style.BOLD, Style.BLUE), c("h", Style.BOLD, Style.BLUE),
+        c("p", Style.BOLD, Style.BLUE), c("o", Style.BOLD, Style.BLUE)))
 
     last = len(services) - 1
+    prompt = c("请输入网卡序号 (0-%d)，或 c/h/p/o 改配置，q 退出: " % last, Style.BOLD, Style.CYAN)
     while True:
-        raw = input("\n请输入网卡序号 (0-%d)，或 c/h/p/o 改配置，q 退出: " % last).strip().lower()
+        raw = input(prompt).strip().lower()
         if raw.isdigit() and 0 <= int(raw) <= last:
             return "run", services[int(raw)]
-        if raw == "c":
-            return "edit", "c"
-        if raw == "h":
-            return "edit", "h"
-        if raw == "p":
-            return "edit", "p"
-        if raw == "o":
-            return "edit", "o"
+        if raw in ("c", "h", "p", "o"):
+            return "edit", raw
         if raw in ("q", "quit", "exit"):
             return "quit", None
-        print(">> 输入无效，请输入网卡序号或 c/h/p/o")
+        warn("输入无效，请输入网卡序号或 c/h/p/o")
 
 
 def prompt_ip(profile):
     """公司/家里模式：可临时修改 IP，直接回车使用配置默认值"""
-    raw = input("请输入IP（直接回车使用配置默认 %s）: " % profile["ip"]).strip()
+    prompt = c("请输入 IP（回车使用配置默认 %s）: " % profile["ip"], Style.BOLD, Style.CYAN)
+    raw = input(prompt).strip()
     return raw or profile["ip"]
 
 
@@ -405,21 +539,25 @@ def parse_list(text):
 def ask(label, current, validator=None, list_value=False):
     """带默认值和校验的输入。回车保留原值，输入 - 清空列表。"""
     shown = " ".join(current) if list_value else (current or "空")
+    prompt = "  %s %s " % (c(pad(label, 12), Style.GREY),
+                           c("[%s]:" % shown, Style.DIM))
     while True:
-        raw = input("  %-14s [%s]: " % (label, shown)).strip()
+        raw = input(prompt).strip()
         if not raw:
             return list(current) if list_value else current
         if list_value:
             return parse_list(raw)
         if validator and not validator(raw):
-            print("  >> 格式不正确，请重新输入")
+            warn("格式不正确，请重新输入")
             continue
         return raw
 
 
 def edit_profile(profiles, key, label):
     p = profiles[key]
-    print("\n修改【%s】配置（回车保持不变，列表中输入 - 表示清空）：" % label)
+    print("")
+    print_caption("修改【%s】配置" % label,
+                  "回车保持不变，列表中输入 - 表示清空")
     ip = ask("IP 地址", p["ip"], valid_ip)
     netmask = ask("子网掩码", p["netmask"], valid_netmask)
     gateway = ask("网关", p["gateway"], valid_ip)
@@ -431,7 +569,8 @@ def edit_profile(profiles, key, label):
 
 def edit_proxy(profiles):
     p = profiles["proxy"]
-    print("\n修改 PAC 代理链接（回车保持不变）：")
+    print("")
+    print_caption("修改 PAC 代理链接", "回车保持不变")
     wan = ask("WAN-PROXY", p["wan"], valid_url)
     lan = ask("LAN-PROXY", p["lan"], valid_url)
     profiles["proxy"] = {"wan": wan, "lan": lan}
@@ -439,26 +578,21 @@ def edit_proxy(profiles):
 
 def open_config_in_editor(path):
     """用系统默认文本编辑器打开配置文件"""
-    print(">> 正在用文本编辑器打开: %s" % path)
+    step("用文本编辑器打开: %s" % path)
     subprocess.run(["open", "-t", path])
-    input("修改并保存后，按回车键重新加载配置...")
+    input(c("  修改并保存后，按回车键重新加载配置 ... ", Style.BOLD, Style.CYAN))
 
 
 def commit_config(config_path, profiles):
     """保存配置并重新加载，返回 (config_path, profiles)"""
     saved = save_config(config_path, profiles)
     if not saved:
-        print(">> 保存失败：配置文件和 ~/.setip 都不可写，请检查 app 所在位置权限")
+        error("保存失败：配置文件和 ~/.setip 都不可写，请检查 app 所在位置权限")
         return config_path, profiles
     config_path = saved
     profiles = load_config(config_path)
-    print(">> 已保存并生效: %s" % config_path)
-    print("   公司: %s/%s  网关 %s  DNS %s" % (
-        profiles["company"]["ip"], profiles["company"]["netmask"],
-        profiles["company"]["gateway"], " ".join(profiles["company"]["dns"]) or "无"))
-    print("   家里: %s/%s  网关 %s  DNS %s" % (
-        profiles["home"]["ip"], profiles["home"]["netmask"],
-        profiles["home"]["gateway"], " ".join(profiles["home"]["dns"]) or "无"))
+    success("已保存并生效: %s" % config_path)
+    config_summary(profiles)
     return config_path, profiles
 
 
@@ -478,29 +612,26 @@ def handle_edit(code, config_path, profiles):
         try:
             return config_path, load_config(config_path)
         except SystemExit:
-            print(">> 配置文件有误，已保留内存中的旧配置")
+            warn("配置文件有误，已保留内存中的旧配置")
             return config_path, profiles
     return commit_config(config_path, profiles)
 
 
 def main():
-    print("=" * 50)
-    print(("%s" % APP_NAME).center(46))
-    print("=" * 50)
+    banner("macOS")
 
     config_path = get_config_path()
     profiles = load_config(config_path)
-    print(">> 配置文件: %s\n" % config_path)
+    hint("配置文件: %s" % config_path)
 
     # 选网卡界面（同时展示当前配置、可直接改配置）
     service = None
     while service is None:
         action, value = choose_service(profiles)
         if action == "quit":
-            print("再见！")
+            print(c("  再见！", Style.DIM))
             return
         if action == "edit":
-            print("")
             config_path, profiles = handle_edit(value, config_path, profiles)
             print("")
             continue
@@ -509,14 +640,15 @@ def main():
     show_info(service)
 
     while True:
-        print("\n请选择要应用的配置：")
-        print("  1、公司")
-        print("  2、家里")
-        print("  3、DHCP（自动获取）")
-        print("  4、代理 PAC")
+        print("")
+        section("请选择操作")
+        menu_item("1", "公司")
+        menu_item("2", "家里")
+        menu_item("3", "DHCP（自动获取）")
+        menu_item("4", "代理 PAC")
         print_config_items()
-        print("  q、退出")
-        choice = input("请选择: ").strip().lower()
+        menu_item("q", "退出", Style.GREY)
+        choice = input(c("请选择: ", Style.BOLD, Style.CYAN)).strip().lower()
 
         if choice == "1":
             apply_manual(service, prompt_ip(profiles["company"]),
@@ -531,13 +663,14 @@ def main():
         elif choice == "4":
             proxy = profiles["proxy"]
             if not proxy["wan"] or not proxy["lan"]:
-                print(">> 配置文件中 proxy 段缺少 wan/lan 链接，请先补充: %s" % config_path)
+                warn("配置文件中 proxy 段缺少 wan/lan 链接，请先补充: %s" % config_path)
                 continue
-            print("请选择代理链接：")
-            print("  1、WAN-PROXY  (%s)" % proxy["wan"])
-            print("  2、LAN-PROXY  (%s)" % proxy["lan"])
-            print("  3、关闭 PAC 代理")
-            sub = input("请选择: ").strip()
+            print("")
+            section("代理 PAC")
+            menu_item("1", "WAN-PROXY  " + c(proxy["wan"], Style.DIM))
+            menu_item("2", "LAN-PROXY  " + c(proxy["lan"], Style.DIM))
+            menu_item("3", "关闭 PAC 代理", Style.YELLOW)
+            sub = input(c("请选择: ", Style.BOLD, Style.CYAN)).strip()
             if sub == "1":
                 apply_pac(service, proxy["wan"])
             elif sub == "2":
@@ -545,14 +678,14 @@ def main():
             elif sub == "3":
                 apply_pac_off(service)
             else:
-                print(">> 输入无效，请输入 1 / 2 / 3")
+                warn("输入无效，请输入 1 / 2 / 3")
         elif choice in ("5", "6", "7", "8"):
             config_path, profiles = handle_edit(choice, config_path, profiles)
         elif choice in ("q", "quit", "exit"):
-            print("再见！")
+            print(c("  再见！", Style.DIM))
             break
         else:
-            print(">> 输入无效，请输入 1-8 / q")
+            warn("输入无效，请输入 1-8 / q")
 
 
 if __name__ == "__main__":

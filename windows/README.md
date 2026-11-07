@@ -70,6 +70,14 @@ python setip_windows.py
 请输入网卡序号 (0-1)，或 c/h/p/o 改配置，q 退出：
 ```
 
+## 输出配色
+
+与 macOS 版同一套配色：绿色 ✓ 生效、红色 ✗ 未生效、黄色 ⚠ 警告、青色标题与菜单编号。
+
+- 关掉颜色：`set SETIP_COLOR=never`
+- 强制开启：`set SETIP_COLOR=always`
+- 程序启动时会自动为控制台开启 ANSI 支持（`SetConsoleMode` + `ENABLE_VIRTUAL_TERMINAL_PROCESSING`）；Windows 8 及更早不支持，会自动回退成无颜色输出
+
 ## 与 macOS 版的实现差异
 
 | 功能 | macOS | Windows |
