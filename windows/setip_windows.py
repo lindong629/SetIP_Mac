@@ -79,7 +79,13 @@ def bundled_config():
     """打包时塞进 exe 的 config.yaml（PyInstaller 解压到临时目录 _MEIPASS）"""
     base = getattr(sys, "_MEIPASS", None)
     if base:
-        path = os.path.join(base, "config.yaml")
+        for path in (os.path.join(base, "config.yaml"),
+                     os.path.join(base, "_internal", "config.yaml")):
+            if os.path.isfile(path):
+                return path
+    # 兼容 onedir 打包/开发环境
+    for path in (os.path.join(exe_dir(), "config.yaml"),
+                 os.path.join(exe_dir(), "_internal", "config.yaml")):
         if os.path.isfile(path):
             return path
     return None
