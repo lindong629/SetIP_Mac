@@ -406,51 +406,22 @@ def open_config_in_editor(path):
     input("修改并保存后，按回车键重新加载配置...")
 
 
-def settings_menu(config_path, profiles):
-    """返回 (config_path, profiles)，配置可能被修改并重新加载"""
-    while True:
-        print("\n设置（配置文件: %s）" % config_path)
-        print("  1、修改公司配置")
-        print("  2、修改家里配置")
-        print("  3、修改 PAC 代理链接")
-        print("  4、用文本编辑器打开配置文件")
-        print("  0、返回主菜单")
-        choice = input("请选择: ").strip()
-
-        if choice in ("0", "", "b"):
-            return config_path, profiles
-
-        if choice == "1":
-            edit_profile(profiles, "company", "公司")
-        elif choice == "2":
-            edit_profile(profiles, "home", "家里")
-        elif choice == "3":
-            edit_proxy(profiles)
-        elif choice == "4":
-            open_config_in_editor(config_path)
-            try:
-                profiles = load_config(config_path)
-                print(">> 配置已重新加载")
-            except SystemExit:
-                print(">> 配置文件有误，已保留内存中的旧配置")
-            continue
-        else:
-            print(">> 输入无效，请输入 0-4")
-            continue
-
-        saved = save_config(config_path, profiles)
-        if saved:
-            config_path = saved
-            profiles = load_config(config_path)
-            print(">> 已保存并生效: %s" % config_path)
-            print("   公司: %s/%s  网关 %s  DNS %s" % (
-                profiles["company"]["ip"], profiles["company"]["netmask"],
-                profiles["company"]["gateway"], " ".join(profiles["company"]["dns"]) or "无"))
-            print("   家里: %s/%s  网关 %s  DNS %s" % (
-                profiles["home"]["ip"], profiles["home"]["netmask"],
-                profiles["home"]["gateway"], " ".join(profiles["home"]["dns"]) or "无"))
-        else:
-            print(">> 保存失败：配置文件和 ~/.setip 都不可写，请检查 app 所在位置权限")
+def commit_config(config_path, profiles):
+    """保存配置并重新加载，返回 (config_path, profiles)"""
+    saved = save_config(config_path, profiles)
+    if not saved:
+        print(">> 保存失败：配置文件和 ~/.setip 都不可写，请检查 app 所在位置权限")
+        return config_path, profiles
+    config_path = saved
+    profiles = load_config(config_path)
+    print(">> 已保存并生效: %s" % config_path)
+    print("   公司: %s/%s  网关 %s  DNS %s" % (
+        profiles["company"]["ip"], profiles["company"]["netmask"],
+        profiles["company"]["gateway"], " ".join(profiles["company"]["dns"]) or "无"))
+    print("   家里: %s/%s  网关 %s  DNS %s" % (
+        profiles["home"]["ip"], profiles["home"]["netmask"],
+        profiles["home"]["gateway"], " ".join(profiles["home"]["dns"]) or "无"))
+    return config_path, profiles
 
 
 def main():
@@ -471,7 +442,11 @@ def main():
         print("  2、家里")
         print("  3、DHCP（自动获取）")
         print("  4、代理 PAC")
-        print("  5、设置")
+        print("  ── 修改配置 ──")
+        print("  5、修改公司配置")
+        print("  6、修改家里配置")
+        print("  7、修改 PAC 代理链接")
+        print("  8、打开配置文件")
         print("  q、退出")
         choice = input("请选择: ").strip().lower()
 
@@ -504,12 +479,26 @@ def main():
             else:
                 print(">> 输入无效，请输入 1 / 2 / 3")
         elif choice == "5":
-            config_path, profiles = settings_menu(config_path, profiles)
+            edit_profile(profiles, "company", "公司")
+            config_path, profiles = commit_config(config_path, profiles)
+        elif choice == "6":
+            edit_profile(profiles, "home", "家里")
+            config_path, profiles = commit_config(config_path, profiles)
+        elif choice == "7":
+            edit_proxy(profiles)
+            config_path, profiles = commit_config(config_path, profiles)
+        elif choice == "8":
+            open_config_in_editor(config_path)
+            try:
+                profiles = load_config(config_path)
+                print(">> 配置已重新加载")
+            except SystemExit:
+                print(">> 配置文件有误，已保留内存中的旧配置")
         elif choice in ("q", "quit", "exit"):
             print("再见！")
             break
         else:
-            print(">> 输入无效，请输入 1 / 2 / 3 / 4 / 5 / q")
+            print(">> 输入无效，请输入 1-8 / q")
 
 
 if __name__ == "__main__":
