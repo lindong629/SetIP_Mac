@@ -315,8 +315,30 @@ def apply_dhcp(service):
 
 # ---------------------------------------------------------------- 交互 UI --
 
-def choose_service():
-    """选择要操作的网卡，带输入校验"""
+def print_config_items():
+    print("  ── 修改配置 ──")
+    print("  5、修改公司配置")
+    print("  6、修改家里配置")
+    print("  7、修改 PAC 代理链接")
+    print("  8、打开配置文件")
+
+
+def config_summary(profiles):
+    """列出当前配置，方便在选网卡前确认参数"""
+    c, h, proxy = profiles["company"], profiles["home"], profiles["proxy"]
+    print("当前配置：")
+    print("  公司: %s/%s  网关 %s  DNS %s  搜索域 %s" % (
+        c["ip"] or "空", c["netmask"] or "空", c["gateway"] or "空",
+        " ".join(c["dns"]) or "无", " ".join(c["search_domains"]) or "无"))
+    print("  家里: %s/%s  网关 %s  DNS %s  搜索域 %s" % (
+        h["ip"] or "空", h["netmask"] or "空", h["gateway"] or "空",
+        " ".join(h["dns"]) or "无", " ".join(h["search_domains"]) or "无"))
+    print("  PAC:  WAN %s" % (proxy["wan"] or "未配置"))
+    print("        LAN %s" % (proxy["lan"] or "未配置"))
+
+
+def choose_service(profiles):
+    """选择网卡。返回 ("run", 网卡名) / ("edit", c/h/p/o) / ("quit", None)"""
     services = list_services()
     if not services:
         print(">> 未找到任何网络服务，请检查系统设置")
@@ -325,12 +347,28 @@ def choose_service():
     print("可操作的网卡：")
     for i, name in enumerate(services):
         print("  [%d] %s" % (i, name))
+    print("")
+    config_summary(profiles)
+    print("\n也可以直接在这里改配置：")
+    print("  c、修改公司配置    h、修改家里配置")
+    print("  p、修改 PAC 链接   o、打开配置文件")
 
+    last = len(services) - 1
     while True:
-        raw = input("请输入网卡序号 (0-%d): " % (len(services) - 1)).strip()
-        if raw.isdigit() and 0 <= int(raw) < len(services):
-            return services[int(raw)]
-        print(">> 输入无效，请重新输入")
+        raw = input("\n请输入网卡序号 (0-%d)，或 c/h/p/o 改配置，q 退出: " % last).strip().lower()
+        if raw.isdigit() and 0 <= int(raw) <= last:
+            return "run", services[int(raw)]
+        if raw == "c":
+            return "edit", "c"
+        if raw == "h":
+            return "edit", "h"
+        if raw == "p":
+            return "edit", "p"
+        if raw == "o":
+            return "edit", "o"
+        if raw in ("q", "quit", "exit"):
+            return "quit", None
+        print(">> 输入无效，请输入网卡序号或 c/h/p/o")
 
 
 def prompt_ip(profile):
@@ -424,6 +462,27 @@ def commit_config(config_path, profiles):
     return config_path, profiles
 
 
+def handle_edit(code, config_path, profiles):
+    """按编号编辑配置并保存，返回 (config_path, profiles)
+    code: c=公司 h=家里 p=PAC链接 o=打开配置文件（也可传 "5"-"8"）
+    """
+    code = {"5": "c", "6": "h", "7": "p", "8": "o"}.get(code, code)
+    if code == "c":
+        edit_profile(profiles, "company", "公司")
+    elif code == "h":
+        edit_profile(profiles, "home", "家里")
+    elif code == "p":
+        edit_proxy(profiles)
+    elif code == "o":
+        open_config_in_editor(config_path)
+        try:
+            return config_path, load_config(config_path)
+        except SystemExit:
+            print(">> 配置文件有误，已保留内存中的旧配置")
+            return config_path, profiles
+    return commit_config(config_path, profiles)
+
+
 def main():
     print("=" * 50)
     print(("%s" % APP_NAME).center(46))
@@ -433,7 +492,20 @@ def main():
     profiles = load_config(config_path)
     print(">> 配置文件: %s\n" % config_path)
 
-    service = choose_service()
+    # 选网卡界面（同时展示当前配置、可直接改配置）
+    service = None
+    while service is None:
+        action, value = choose_service(profiles)
+        if action == "quit":
+            print("再见！")
+            return
+        if action == "edit":
+            print("")
+            config_path, profiles = handle_edit(value, config_path, profiles)
+            print("")
+            continue
+        service = value
+
     show_info(service)
 
     while True:
@@ -442,11 +514,7 @@ def main():
         print("  2、家里")
         print("  3、DHCP（自动获取）")
         print("  4、代理 PAC")
-        print("  ── 修改配置 ──")
-        print("  5、修改公司配置")
-        print("  6、修改家里配置")
-        print("  7、修改 PAC 代理链接")
-        print("  8、打开配置文件")
+        print_config_items()
         print("  q、退出")
         choice = input("请选择: ").strip().lower()
 
@@ -478,22 +546,8 @@ def main():
                 apply_pac_off(service)
             else:
                 print(">> 输入无效，请输入 1 / 2 / 3")
-        elif choice == "5":
-            edit_profile(profiles, "company", "公司")
-            config_path, profiles = commit_config(config_path, profiles)
-        elif choice == "6":
-            edit_profile(profiles, "home", "家里")
-            config_path, profiles = commit_config(config_path, profiles)
-        elif choice == "7":
-            edit_proxy(profiles)
-            config_path, profiles = commit_config(config_path, profiles)
-        elif choice == "8":
-            open_config_in_editor(config_path)
-            try:
-                profiles = load_config(config_path)
-                print(">> 配置已重新加载")
-            except SystemExit:
-                print(">> 配置文件有误，已保留内存中的旧配置")
+        elif choice in ("5", "6", "7", "8"):
+            config_path, profiles = handle_edit(choice, config_path, profiles)
         elif choice in ("q", "quit", "exit"):
             print("再见！")
             break
