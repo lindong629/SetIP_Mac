@@ -4,17 +4,21 @@
 
 ## 功能
 
-- 1、公司 —— 按 config.yaml 中 `company` 配置设置静态 IP
-- 2、家里 —— 按 config.yaml 中 `home` 配置设置静态 IP
+- 1、公司 —— 按配置中的 `company` 段设置静态 IP
+- 2、家里 —— 按配置中的 `home` 段设置静态 IP
 - 3、DHCP —— 自动获取 IP，并清除手动 DNS / 搜索域
-- 4、代理 PAC —— 子选项 WAN-PROXY / LAN-PROXY（链接在 config.yaml 的 `proxy` 段）
+- 4、代理 PAC —— 子选项 WAN-PROXY / LAN-PROXY / 关闭代理
+- 5、设置 —— 程序内直接修改配置（公司 / 家里 / PAC 链接），也可用文本编辑器打开原文件
+
+每次设置后都会回读系统实际配置并逐项对比显示 ✓ / ✗（应用情况）。
 
 ## 配置文件
 
-程序启动时按以下顺序查找 `config.yaml`：
+配置文件**打包在 app 内部**：`SetIP.app/Contents/Resources/config.yaml`
 
-1. `SetIP.app` 所在目录（推荐：把 config.yaml 和 SetIP.app 放一起）
-2. `~/.setip/config.yaml`（首次运行会自动生成模板）
+- 优先使用包内配置（配置跟着 app 走，复制/移动 app 不会丢配置）
+- 包内不可写时自动回退到 `~/.setip/config.yaml`
+- 修改方式：程序里选 `5、设置`，或用文本编辑器打开配置文件（设置菜单第 4 项）
 
 模板格式：
 
