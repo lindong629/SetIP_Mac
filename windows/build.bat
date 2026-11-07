@@ -6,11 +6,12 @@ cd /d %~dp0
 
 python -m pip install --upgrade pyyaml pyinstaller || goto :error
 python -m py_compile setip_windows.py || goto :error
-python -m PyInstaller --onefile --name SetIP --clean -y setip_windows.py || goto :error
+rem config.yaml 打进 exe（首次运行自动释放到 %%APPDATA%%\SetIP\config.yaml）
+python -m PyInstaller --onefile --name SetIP --clean -y --add-data "config.yaml;." setip_windows.py || goto :error
 
 echo.
 echo 打包完成: dist\SetIP.exe
-echo 把 SetIP.exe 和 config.yaml 放在同一个文件夹，双击 SetIP.exe 即可使用。
+echo 直接双击 SetIP.exe 即可，配置已内置（首次运行释放到 %%APPDATA%%\SetIP\config.yaml）。
 pause
 exit /b 0
 

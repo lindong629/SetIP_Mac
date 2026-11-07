@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # SetIP for Windows - IP 快速切换工具
-# 菜单：1、公司  2、家里  3、DHCP  4、代理 PAC
-# 配置文件：config.yaml（与 macOS 版格式完全一致，首次运行自动生成）
+# 菜单：1、公司  2、家里  3、DHCP  4、代理 PAC  5、设置
+# 配置文件：内置在 exe 里，首次运行自动释放到 %APPDATA%\SetIP\config.yaml
 # 需要 Python 3.8+ 与 PyYAML；打包为 exe 后双击运行，退出后窗口自动关闭。
 
 import ctypes
+import json
 import os
 import subprocess
 import sys
+import time
 
 try:
     import winreg
@@ -61,34 +63,90 @@ def is_frozen():
     return getattr(sys, "frozen", False)
 
 
-def config_search_dirs():
-    dirs = []
+def exe_dir():
+    """exe（或源码）所在目录"""
     if is_frozen():
-        dirs.append(os.path.dirname(os.path.abspath(sys.executable)))
-    else:
-        dirs.append(os.path.dirname(os.path.abspath(__file__)))
-    dirs.append(os.path.join(os.path.expanduser("~"), ".setip"))
-    return dirs
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def user_config_dir():
+    """用户可写配置目录：%APPDATA%\\SetIP"""
+    return os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "SetIP")
+
+
+def bundled_config():
+    """打包时塞进 exe 的 config.yaml（PyInstaller 解压到临时目录 _MEIPASS）"""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        path = os.path.join(base, "config.yaml")
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def config_candidates():
+    """配置文件候选路径（按优先级）：
+    1. exe 同级 config.yaml —— 便携模式/旧版遗留，存在就用它并写回它
+    2. %APPDATA%\\SetIP\\config.yaml —— 默认位置，首次运行由程序自动释放
+    """
+    return [os.path.join(exe_dir(), "config.yaml"),
+            os.path.join(user_config_dir(), "config.yaml")]
 
 
 def get_config_path():
-    for d in config_search_dirs():
-        path = os.path.join(d, "config.yaml")
+    for path in config_candidates():
         if os.path.isfile(path):
             return path
-    for d in config_search_dirs():
-        path = os.path.join(d, "config.yaml")
+
+    # 首次运行：把 exe 内置的配置释放成可编辑的真实文件
+    target = config_candidates()[-1]
+    source = bundled_config()
+    try:
+        text = open(source, "r", encoding="utf-8").read() if source else CONFIG_TEMPLATE
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(">> 首次运行，已从程序内置配置初始化: %s" % target)
+        return target
+    except OSError:
+        pass
+
+    target = config_candidates()[0]
+    try:
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(CONFIG_TEMPLATE)
+        print(">> 未找到配置文件，已自动生成模板: %s" % target)
+        return target
+    except OSError:
+        print(">> 错误：无法创建配置文件")
+        sys.exit(1)
+
+
+def save_config(path, profiles):
+    """写回配置文件（带注释头）。成功返回实际写入路径，失败返回 None。"""
+    data = {
+        "company": dict(profiles["company"]),
+        "home": dict(profiles["home"]),
+        "proxy": dict(profiles["proxy"]),
+    }
+    header = ("# ==========================================================\n"
+              "# SetIP 配置文件（YAML 格式，与 macOS 版通用）\n"
+              "# 由程序「设置」菜单生成，也可以直接用记事本修改。\n"
+              "# ==========================================================\n\n")
+    text = header + yaml.safe_dump(data, allow_unicode=True, sort_keys=False,
+                                  default_flow_style=False)
+
+    targets = [path] + [p for p in config_candidates() if p != path]
+    for target in targets:
         try:
-            os.makedirs(d, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(CONFIG_TEMPLATE)
-            print(">> 未找到配置文件，已自动生成模板: %s" % path)
-            print(">> 请编辑该文件填入实际参数后重新运行。本次使用模板默认值。")
-            return path
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(text)
+            return target
         except OSError:
             continue
-    print(">> 错误：无法创建配置文件")
-    sys.exit(1)
+    return None
 
 
 def load_config(path):
@@ -104,6 +162,10 @@ def load_config(path):
         item = data.get(key)
         if not isinstance(item, dict):
             print('>> 配置文件缺少 "%s" 配置段，请检查 %s' % (key, path))
+            sys.exit(1)
+        missing = [k for k in ("ip", "netmask", "gateway", "dns") if not item.get(k)]
+        if key == "company" and missing:
+            print('>> "%s" 缺少字段: %s，请检查配置文件' % (key, ", ".join(missing)))
             sys.exit(1)
         profiles[key] = {
             "ip": str(item.get("ip", "")),
@@ -162,7 +224,6 @@ def ps_json(script):
     out = ps(script + " | ConvertTo-Json -Depth 3 -Compress")
     if not out:
         return []
-    import json
     try:
         data = json.loads(out)
     except ValueError:
@@ -376,7 +437,6 @@ def apply_pac_off():
 
 
 def time_sleep():
-    import time
     time.sleep(2)  # 等待系统应用网络配置
 
 
@@ -421,6 +481,120 @@ def prompt_ip(profile):
     return raw or profile["ip"]
 
 
+# ---------------------------------------------------------------- 设置菜单 --
+
+def valid_ip(text):
+    parts = text.split(".")
+    return len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts)
+
+
+def valid_netmask(text):
+    if not valid_ip(text):
+        return False
+    bits = "".join(format(int(p), "08b") for p in text.split("."))
+    return "01" not in bits  # 掩码必须是连续的 1
+
+
+def valid_url(text):
+    return text.startswith("http://") or text.startswith("https://")
+
+
+def parse_list(text):
+    """逗号或空格分隔 -> 列表；输入 - 表示清空"""
+    if text.strip() == "-":
+        return []
+    return [s for s in text.replace(",", " ").split() if s]
+
+
+def ask(label, current, validator=None, list_value=False):
+    """带默认值和校验的输入。回车保留原值，输入 - 清空列表。"""
+    shown = " ".join(current) if list_value else (current or "空")
+    while True:
+        raw = input("  %-14s [%s]: " % (label, shown)).strip()
+        if not raw:
+            return list(current) if list_value else current
+        if list_value:
+            return parse_list(raw)
+        if validator and not validator(raw):
+            print("  >> 格式不正确，请重新输入")
+            continue
+        return raw
+
+
+def edit_profile(profiles, key, label):
+    p = profiles[key]
+    print("\n修改【%s】配置（回车保持不变，列表中输入 - 表示清空）：" % label)
+    ip = ask("IP 地址", p["ip"], valid_ip)
+    netmask = ask("子网掩码", p["netmask"], valid_netmask)
+    gateway = ask("网关", p["gateway"], valid_ip)
+    dns = ask("DNS", p["dns"], list_value=True)
+    domains = ask("搜索域", p["search_domains"], list_value=True)
+    profiles[key] = {"ip": ip, "netmask": netmask, "gateway": gateway,
+                     "dns": dns, "search_domains": domains}
+
+
+def edit_proxy(profiles):
+    p = profiles["proxy"]
+    print("\n修改 PAC 代理链接（回车保持不变）：")
+    wan = ask("WAN-PROXY", p["wan"], valid_url)
+    lan = ask("LAN-PROXY", p["lan"], valid_url)
+    profiles["proxy"] = {"wan": wan, "lan": lan}
+
+
+def open_config_in_editor(path):
+    """用记事本打开配置文件（会等待记事本关闭）"""
+    print(">> 正在用记事本打开: %s" % path)
+    subprocess.run(["notepad", path])
+    input("修改并保存后，按回车键重新加载配置...")
+
+
+def settings_menu(config_path, profiles):
+    """返回 (config_path, profiles)，配置可能被修改并重新加载"""
+    while True:
+        print("\n设置（配置文件: %s）" % config_path)
+        print("  1、修改公司配置")
+        print("  2、修改家里配置")
+        print("  3、修改 PAC 代理链接")
+        print("  4、用记事本打开配置文件")
+        print("  0、返回主菜单")
+        choice = input("请选择: ").strip()
+
+        if choice in ("0", "", "b"):
+            return config_path, profiles
+
+        if choice == "1":
+            edit_profile(profiles, "company", "公司")
+        elif choice == "2":
+            edit_profile(profiles, "home", "家里")
+        elif choice == "3":
+            edit_proxy(profiles)
+        elif choice == "4":
+            open_config_in_editor(config_path)
+            try:
+                profiles = load_config(config_path)
+                print(">> 配置已重新加载")
+            except SystemExit:
+                print(">> 配置文件有误，已保留内存中的旧配置")
+            continue
+        else:
+            print(">> 输入无效，请输入 0-4")
+            continue
+
+        saved = save_config(config_path, profiles)
+        if saved:
+            config_path = saved
+            profiles = load_config(config_path)
+            print(">> 已保存并生效: %s" % config_path)
+            print("   公司: %s/%s  网关 %s  DNS %s" % (
+                profiles["company"]["ip"], profiles["company"]["netmask"],
+                profiles["company"]["gateway"], " ".join(profiles["company"]["dns"]) or "无"))
+            print("   家里: %s/%s  网关 %s  DNS %s" % (
+                profiles["home"]["ip"], profiles["home"]["netmask"],
+                profiles["home"]["gateway"], " ".join(profiles["home"]["dns"]) or "无"))
+        else:
+            print(">> 保存失败：配置目录不可写，请检查 %s 的权限" % config_path)
+
+
 def main():
     print("=" * 50)
     print(("%s" % APP_NAME).center(46))
@@ -444,6 +618,7 @@ def main():
         print("  2、家里")
         print("  3、DHCP（自动获取）")
         print("  4、代理 PAC")
+        print("  5、设置")
         print("  q、退出")
         choice = input("请选择: ").strip().lower()
 
@@ -475,11 +650,13 @@ def main():
                 apply_pac_off()
             else:
                 print(">> 输入无效，请输入 1 / 2 / 3")
+        elif choice == "5":
+            config_path, profiles = settings_menu(config_path, profiles)
         elif choice in ("q", "quit", "exit"):
             print("再见！")
             break
         else:
-            print(">> 输入无效，请输入 1 / 2 / 3 / 4 / q")
+            print(">> 输入无效，请输入 1 / 2 / 3 / 4 / 5 / q")
 
 
 if __name__ == "__main__":

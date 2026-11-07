@@ -2,6 +2,8 @@
 
 双击 `SetIP.app` 即可运行（会自动打开终端窗口）。
 
+> Windows 版在 [`windows/`](windows/) 目录，功能与菜单完全一致（含设置菜单、配置内置），见 [windows/README.md](windows/README.md)。
+
 ## 功能
 
 - 1、公司 —— 按配置中的 `company` 段设置静态 IP

@@ -25,14 +25,13 @@ jobs:
 
       - name: Build EXE
         working-directory: windows
-        run: pyinstaller --onefile --name SetIP --clean -y setip_windows.py
+        run: pyinstaller --onefile --name SetIP --clean -y --add-data "config.yaml;." setip_windows.py
 
       - name: Package
         working-directory: windows
         shell: pwsh
         run: |
-          copy config.yaml dist\config.yaml
-          Compress-Archive -Path dist\SetIP.exe, dist\config.yaml -DestinationPath SetIP-windows.zip -Force
+          Compress-Archive -Path dist\SetIP.exe -DestinationPath SetIP-windows.zip -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
