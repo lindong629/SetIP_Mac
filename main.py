@@ -884,7 +884,16 @@ def main():
                         warn("配置文件中 proxy 段缺少 wan/lan 链接，请先补充: %s" % state["config"])
                         pause()
                         continue
-                    hint("1 WAN  2 LAN  3 关闭")
+                    if NATIVE:
+                        emit("title", "代理 PAC")
+                        emit("menu", "1", "WAN 代理")
+                        emit("menu", "2", "LAN 代理")
+                        emit("menu", "3", "关闭 PAC")
+                    else:
+                        print("")
+                        print("  " + c("代理 PAC", Style.BOLD, Style.CYAN))
+                        print("  1 WAN 代理   2 LAN 代理   3 关闭 PAC")
+                    hint("↑↓ 选择或输入 1 / 2 / 3")
                     sub = native_input(c("PAC 选择: ", Style.BOLD, Style.CYAN)).strip()
                     if sub == "1":
                         apply_pac(service, proxy["wan"])

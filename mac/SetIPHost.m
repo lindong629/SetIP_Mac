@@ -1,9 +1,9 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
-// 版本号由 build_app.sh 从 Info.plist 注入；单独编译测试时回退到 2.16。
+// 版本号由 build_app.sh 从 Info.plist 注入；单独编译测试时回退到 2.17。
 #ifndef SETIP_VERSION
-#define SETIP_VERSION "2.16"
+#define SETIP_VERSION "2.17"
 #endif
 
 // SetIP 原生宿主窗口：直接在 App 内运行 SetIP-bin，不再借 Terminal。
@@ -28,6 +28,11 @@
 @property (strong, nonatomic) NSTask *task;
 @property (strong, nonatomic) NSPipe *stdinPipe;
 @property (strong, nonatomic) NSMutableString *raw;
+// 方向键选择：从当前屏的 adapter/menu token 提取可选项
+@property (strong, nonatomic) NSArray<NSDictionary *> *selectOptions; // 每项 @{@"key":token首字段, @"value":要提交给Python的值}
+@property (nonatomic) NSInteger selectedIndex;   // -1 = 未用方向键选中（保持空回车默认行为）
+@property (nonatomic) BOOL settingSelectionProgrammatically; // 程序化填入选中值时跳过"手动输入取消高亮"
+@property (nonatomic) NSUInteger lastClearFrom;  // 换屏检测：清屏位置变化时重置选中态
 - (void)layoutSubviews;
 @end
 
@@ -73,7 +78,7 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
     [self buildMenu];
     [self buildWindow];
-    [self monitorEscape];
+    [self monitorKeys];
     [self.window makeKeyAndOrderFront:nil];
     [self.window makeFirstResponder:self.input];
     [NSApp activateIgnoringOtherApps:YES];
@@ -377,6 +382,9 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
     self.columnTexts = [NSMutableArray array];
     self.sectionWidths = [NSMutableArray array];
     self.sectionHeights = [NSMutableArray array];
+    self.selectOptions = @[];
+    self.selectedIndex = -1;
+    self.lastClearFrom = 0;
 
     // 底部提示条（hint / sub）：横跨卡片、浅色文字，无边框
     NSTextView *hint = [[NSTextView alloc] initWithFrame:NSZeroRect];
@@ -462,16 +470,58 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
     [self layoutSubviews];
 }
 
-// Esc / ⌘R / 顶部按钮：向子进程写入 ESC 行，Python 在任意输入点识别并回到主界面
-- (void)monitorEscape {
+// Esc / ⌘R / 顶部按钮：向子进程写入 ESC 行，Python 在任意输入点识别并回到主界面。
+// ↑ / ↓：在当前屏的可选项之间移动选中项（同时兼容直接输入）。
+- (void)monitorKeys {
     __weak AppDelegate *weakSelf = self;
     [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
         if (event.keyCode == 53) {  // Esc
             [weakSelf goHome];
             return nil;
         }
+        if (event.keyCode == 126) { // ↑
+            return [weakSelf moveSelection:-1] ? nil : event;
+        }
+        if (event.keyCode == 125) { // ↓
+            return [weakSelf moveSelection:1] ? nil : event;
+        }
         return event;
     }];
+}
+
+// 方向键切换选中项：把该项要提交的值填入输入框并高亮它。
+// 直接输入仍可用——一旦用户手动改动输入框内容，就取消方向键选中态。
+// 返回值表示本次是否确实消费了方向键（有可选项才消费）。
+- (BOOL)moveSelection:(NSInteger)delta {
+    NSArray *opts = self.selectOptions;
+    if (!opts || opts.count == 0) return NO;
+
+    NSInteger n = (NSInteger)opts.count;
+    NSInteger cur = self.selectedIndex;
+    NSInteger next;
+    if (cur < 0) {
+        // 首次按方向键：向下从第一项开始，向上从最后一项开始
+        next = (delta > 0) ? 0 : n - 1;
+    } else {
+        next = (cur + delta) % n;
+        if (next < 0) next += n;
+    }
+    self.selectedIndex = next;
+    NSString *value = opts[next][@"value"] ?: @"";
+    self.settingSelectionProgrammatically = YES;
+    [self.input setStringValue:value];
+    self.settingSelectionProgrammatically = NO;
+    [self render];  // 触发高亮重绘
+    return YES;
+}
+
+// 用户一旦手动改动输入框，就取消方向键选中高亮——避免"高亮 A、实际提交 B"的错觉。
+- (void)controlTextDidChange:(NSNotification *)obj {
+    if (self.settingSelectionProgrammatically) return;
+    if (self.selectedIndex >= 0) {
+        self.selectedIndex = -1;
+        [self render];
+    }
 }
 
 - (void)goHome {
@@ -496,6 +546,7 @@ doCommandBySelector:(SEL)commandSelector {
     // 空输入也是有效输入：主程序把空行解释为「选中当前活动网卡」，必须把换行发给子进程
     NSString *line = [self.input stringValue] ?: @"";
     [self.input setStringValue:@""];
+    self.selectedIndex = -1;  // 提交后交回下一屏，避免旧高亮短暂残留
     // 输出区与输入框彼此独立，不要往 raw 插换行——那会让旧内容在清屏前闪一下
     if (!self.task || !self.task.isRunning) {
         return;
@@ -590,6 +641,22 @@ static NSCharacterSet *SetIPFieldSep(void) {
     return [[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@" %@ ", text] attributes:a];
 }
 
+// 当前行是否是方向键选中项（按 token 首字段匹配）
+- (BOOL)isSelectedKey:(NSString *)key {
+    if (self.selectedIndex < 0 || self.selectedIndex >= (NSInteger)self.selectOptions.count) return NO;
+    NSString *sel = self.selectOptions[self.selectedIndex][@"key"] ?: @"";
+    return [sel isEqualToString:key];
+}
+
+// 给选中行加一个左侧箭头 + 淡色底，形成明确的"光标落在这一项"视觉
+- (NSAttributedString *)markSelected:(NSMutableAttributedString *)r para:(NSParagraphStyle *)p {
+    [r insertAttributedString:[self run:@"▸ " font:[self ui:14 weight:NSFontWeightSemibold]
+                                   color:SetIPBlue() para:p] atIndex:0];
+    [r addAttribute:NSBackgroundColorAttributeName value:SetIPHex(@"25324A")
+             range:NSMakeRange(0, r.length)];
+    return r;
+}
+
 - (NSAttributedString *)renderTypedLine:(NSString *)line {
     NSString *type = nil;
     NSArray *f = [self fieldsOfLine:line type:&type];
@@ -622,7 +689,7 @@ static NSCharacterSet *SetIPFieldSep(void) {
             [r appendAttributedString:[self run:@"    " font:[self ui:14 weight:NSFontWeightRegular] color:nil para:p]];
             [r appendAttributedString:[self badge:@"当前活动" fore:SetIPGreen() back:SetIPChipGreen() para:p]];
         }
-        return r;
+        return [self isSelectedKey:val(0)] ? [self markSelected:r para:p] : r;
     }
     if ([type isEqualToString:@"kv"]) {
         NSMutableAttributedString *r = [NSMutableAttributedString new];
@@ -641,7 +708,7 @@ static NSCharacterSet *SetIPFieldSep(void) {
         [r appendAttributedString:[self run:@"   " font:[self ui:14 weight:NSFontWeightRegular] color:nil para:p]];
         [r appendAttributedString:[self run:val(1) font:[self ui:14 weight:NSFontWeightMedium]
                                        color:SetIPInk() para:p]];
-        return r;
+        return [self isSelectedKey:val(0)] ? [self markSelected:r para:p] : r;
     }
     if ([type isEqualToString:@"hint"]) {
         return [self run:val(0) font:[self ui:12.5 weight:NSFontWeightRegular]
@@ -725,6 +792,12 @@ static NSCharacterSet *SetIPFieldSep(void) {
     if (clearH.location  != NSNotFound) from = MAX(from, NSMaxRange(clearH));
     NSString *visible = from > 0 ? [source substringFromIndex:from] : source;
 
+    // 换屏（新的清屏序列）时重置方向键选中态，避免上一屏的高亮残留到新屏
+    if (from > self.lastClearFrom) {
+        self.lastClearFrom = from;
+        self.selectedIndex = -1;
+    }
+
     // 解析为「分区」+「底部提示」：
     //  - title 开启新分区，其后的内容行归入该分区（含 state/menu/adapter/kv 等）
     //  - hint / sub 不占分区，汇入底部一条提示带
@@ -733,6 +806,7 @@ static NSCharacterSet *SetIPFieldSep(void) {
     NSMutableArray *footerLines = [NSMutableArray array];
     NSMutableArray *curLines = nil;
     NSString *curTitle = nil;
+    NSMutableArray *options = [NSMutableArray array];         // 方向键可选项: @{@"key",@"value",@"line"}
     for (NSString *line in [visible componentsSeparatedByString:@"\n"]) {
         if (line.length == 0) continue;
         NSString *type = nil;
@@ -742,6 +816,16 @@ static NSCharacterSet *SetIPFieldSep(void) {
         if ([type isEqualToString:@"hint"] || [type isEqualToString:@"sub"]) {
             [footerLines addObject:v0];
             continue;
+        }
+        // 收集可方向键选择的项。adapter 的 token 首字段形如 [0]，提交给 Python 时要去掉方括号；
+        // menu 的 token 首字段（1/2/3/4）本身就是合法输入，直接使用。
+        if ([type isEqualToString:@"adapter"] || [type isEqualToString:@"menu"]) {
+            NSString *value = v0;
+            if ([type isEqualToString:@"adapter"]) {
+                value = [value stringByTrimmingCharactersInSet:
+                         [NSCharacterSet characterSetWithCharactersInString:@"[]"]];
+            }
+            [options addObject:@{@"key": v0, @"value": value, @"line": line}];
         }
         if ([type isEqualToString:@"title"]) {
             if (curLines) {
@@ -759,6 +843,9 @@ static NSCharacterSet *SetIPFieldSep(void) {
     if (curLines) {
         [sections addObject:@{@"title": (curTitle ?: @""), @"lines": curLines}];
     }
+    // 本屏可选项定稿；若上一屏的选中下标已越界则归零（换屏时上面已重置）
+    self.selectOptions = options;
+    if (self.selectedIndex >= (NSInteger)options.count) self.selectedIndex = -1;
     if (sections.count == 0 && footerLines.count == 0) {
         // 完全空：清掉旧分区
         for (NSView *w in self.columnWraps) [w removeFromSuperview];
