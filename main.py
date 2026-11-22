@@ -448,7 +448,12 @@ def show_info(service):
         print("  %s %s  %s %s/%s  网关 %s" % (
             c("当前 ·", Style.GREY), c(service, Style.BOLD, Style.CYAN),
             c(mode, Style.DIM), ip, mask, gw))
-    dns = " ".join(get_dns_list(service)) or "无"
+    dns_list = get_dns_list(service)
+    if not dns_list:
+        # DHCP 模式下 -getdnsservers 只返回静态配置（空），实际 DNS 由 DHCP 下发，
+        # 回退到 scutil --dns 读取该网卡当前生效的 DNS。
+        dns_list = dns_from_scutil(service_device(service))
+    dns = " ".join(dns_list) or "无"
     domains = " ".join(get_search_domains(service)) or "无"
     enabled, url = get_pac_state(service)
     pac = c("开 " + url if enabled and url else ("开" if enabled else "关"),
@@ -476,6 +481,50 @@ def get_dns_list(service):
     if out.startswith("There aren't any DNS Servers set"):
         return []
     return [l.strip() for l in out.splitlines() if l.strip()]
+
+
+def service_device(service):
+    """把 networksetup 服务名映射到 BSD 设备名（如 Wi-Fi -> en0），失败返回空串。"""
+    out = run_cmd(["networksetup", "-listallhardwareports"])
+    port = ""
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("Hardware Port:"):
+            port = line.split(":", 1)[1].strip()
+        elif line.startswith("Device:") and port:
+            dev = line.split(":", 1)[1].strip()
+            if service == port or service.startswith(port) or port in service:
+                return dev
+    return ""
+
+
+def dns_from_scutil(device):
+    """从 scutil --dns 读取某设备当前生效的 DNS（含 DHCP 下发），去重。
+    -getdnsservers 只能看到静态配置，DHCP 下发的 DNS 需要通过这里读取。
+    """
+    if not device:
+        return []
+    out = run_cmd(["scutil", "--dns"])
+    blocks, cur = [], []
+    for line in out.splitlines():
+        if line.strip().startswith("resolver #"):
+            if cur:
+                blocks.append(cur)
+            cur = [line]
+        elif cur:
+            cur.append(line)
+    if cur:
+        blocks.append(cur)
+    result = []
+    for block in blocks:
+        text = "\n".join(block)
+        if not re.search(r"if_index\s*:\s*\d+\s*\(" + re.escape(device) + r"\)", text):
+            continue
+        for line in block:
+            m = re.match(r"\s*nameserver\[\d+\]\s*:\s*(\S+)", line)
+            if m and m.group(1) not in result:
+                result.append(m.group(1))
+    return result
 
 
 def get_search_domains(service):

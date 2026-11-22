@@ -1,9 +1,9 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
-// 版本号由 build_app.sh 从 Info.plist 注入；单独编译测试时回退到 2.13。
+// 版本号由 build_app.sh 从 Info.plist 注入；单独编译测试时回退到 2.14。
 #ifndef SETIP_VERSION
-#define SETIP_VERSION "2.13"
+#define SETIP_VERSION "2.14"
 #endif
 
 // SetIP 原生宿主窗口：直接在 App 内运行 SetIP-bin，不再借 Terminal。
