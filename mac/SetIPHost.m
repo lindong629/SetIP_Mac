@@ -1,9 +1,9 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
-// 版本号由 build_app.sh 从 Info.plist 注入；单独编译测试时回退到 2.15。
+// 版本号由 build_app.sh 从 Info.plist 注入；单独编译测试时回退到 2.16。
 #ifndef SETIP_VERSION
-#define SETIP_VERSION "2.15"
+#define SETIP_VERSION "2.16"
 #endif
 
 // SetIP 原生宿主窗口：直接在 App 内运行 SetIP-bin，不再借 Terminal。
@@ -18,6 +18,8 @@
 // 一屏分区布局：每个 title 段落占一个栏位，左右并排；不再使用滚动视图。
 @property (strong, nonatomic) NSMutableArray<NSView *> *columnWraps;
 @property (strong, nonatomic) NSMutableArray<NSTextView *> *columnTexts;
+@property (strong, nonatomic) NSMutableArray<NSNumber *> *sectionWidths; // 各分区的自然宽度（不折行）
+@property (strong, nonatomic) NSMutableArray<NSNumber *> *sectionHeights; // 各分区的自然高度
 @property (strong, nonatomic) NSTextView *hintBar;
 @property (nonatomic) CGFloat hintHeight;
 @property (strong, nonatomic) NSTextField *input;
@@ -243,7 +245,8 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
     [self layoutColumns];
 }
 
-// 把已渲染的分区视图排进卡片：hint/sub 汇成底部横条，其余分区按 2 列网格铺满上部。
+// 把已渲染的分区视图排进卡片：hint/sub 汇成底部横条；其余按内容宽度自适应——
+// 内容窄的分区左右并排，内容宽的（如"当前配置"长行）独占整行，确保永不折行。
 - (void)layoutColumns {
     NSRect card = self.cardView.bounds;
     CGFloat W = NSWidth(card), H = NSHeight(card);
@@ -259,29 +262,86 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
 
     NSUInteger n = self.columnWraps.count;
     if (n == 0) return;
-    CGFloat top = H - pad;                       // 分区区顶部
+    CGFloat top = H - pad;
     CGFloat bottom = pad + (hasHint ? hintH + gap : 0);
-    CGFloat availH = top - bottom;               // 分区区可用高度
+    CGFloat availH = top - bottom;
     if (availH < 60) availH = 60;
+    CGFloat innerW = W - pad * 2;                 // 卡片内可用宽度
+    CGFloat tvInset = 6;                          // 每个分区视图左右内边距之和的一半
 
-    NSUInteger cols = n >= 2 ? 2 : 1;
-    NSUInteger rows = (n + cols - 1) / cols;
-    CGFloat cellW = (W - pad * 2 - gap * (cols - 1)) / cols;
-    CGFloat cellH = (availH - gap * (rows - 1)) / rows;
-
+    // 贪心打包成若干「行」：每行放 1 个或 2 个分区；两分区宽度和放得下才并排。
+    NSMutableArray *rows = [NSMutableArray array]; // 每项是一组分区索引
+    NSMutableArray *curRow = [NSMutableArray array];
+    CGFloat curSum = 0;
     for (NSUInteger i = 0; i < n; i++) {
-        NSUInteger r = i / cols, c = i % cols;
-        CGFloat x = pad + c * (cellW + gap);
-        CGFloat yTop = top - r * (cellH + gap);
-        NSView *wrap = self.columnWraps[i];
-        [wrap setFrame:NSMakeRect(x, yTop - cellH, cellW, cellH)];
-        NSTextView *tv = self.columnTexts[i];
-        [tv setFrame:NSMakeRect(10, 8, cellW - 20, cellH - 16)];
+        CGFloat need = (i < self.sectionWidths.count ? [self.sectionWidths[i] floatValue] : innerW / 2);
+        if (need > innerW - tvInset * 2) need = innerW - tvInset * 2; // 超宽内容独占一行，撑满
+        if (curRow.count > 0 && curSum + gap + need > innerW) {
+            [rows addObject:[curRow copy]];
+            curRow = [NSMutableArray array];
+            curSum = 0;
+        }
+        [curRow addObject:@(i)];
+        curSum += need + (curRow.count > 1 ? gap : 0);
+    }
+    if (curRow.count) [rows addObject:[curRow copy]];
+
+    NSUInteger rowCount = rows.count;
+    // 每行自然高度 = 该行各分区自然高度的最大值；按自然高度比例分配可用高度，
+    // 避免内容多的分区（如网卡列表）被平均分配后截断。
+    NSMutableArray *rowNeeds = [NSMutableArray array];
+    CGFloat totalNeed = 0;
+    for (NSArray *idx in rows) {
+        CGFloat need = 60;
+        for (NSNumber *ii in idx) {
+            NSUInteger i = [ii unsignedIntegerValue];
+            CGFloat hh = (i < self.sectionHeights.count ? [self.sectionHeights[i] floatValue] : need);
+            if (hh > need) need = hh;
+        }
+        [rowNeeds addObject:@(need)];
+        totalNeed += need;
+    }
+    CGFloat allocatable = availH - gap * (rowCount - 1);
+    if (allocatable < rowCount * 60) allocatable = rowCount * 60;
+
+    NSMutableArray *rowHeights = [NSMutableArray array];
+    for (NSNumber *need in rowNeeds) {
+        CGFloat h = allocatable * [need floatValue] / totalNeed;
+        if (h < 60) h = 60;
+        [rowHeights addObject:@(h)];
+    }
+
+    CGFloat cursorY = top;
+    for (NSUInteger r = 0; r < rowCount; r++) {
+        NSArray *idx = rows[r];
+        CGFloat rowH = [rowHeights[r] floatValue];
+        CGFloat yTop = cursorY;
+        cursorY -= rowH + gap;
+        if (idx.count == 1) {
+            NSUInteger i = [idx[0] unsignedIntegerValue];
+            NSView *wrap = self.columnWraps[i];
+            [wrap setFrame:NSMakeRect(pad, yTop - rowH, innerW, rowH)];
+            [self.columnTexts[i] setFrame:NSMakeRect(tvInset, 8, innerW - tvInset * 2, rowH - 16)];
+        } else {
+            // 两分区并排：按各自自然宽度分配（含内边距），确保内容不折行
+            NSUInteger i0 = [idx[0] unsignedIntegerValue], i1 = [idx[1] unsignedIntegerValue];
+            CGFloat w0 = (i0 < self.sectionWidths.count ? [self.sectionWidths[i0] floatValue] : innerW / 2) + tvInset * 2;
+            CGFloat w1 = (i1 < self.sectionWidths.count ? [self.sectionWidths[i1] floatValue] : innerW / 2) + tvInset * 2;
+            if (w0 < 60) w0 = 60;
+            if (w1 < 60) w1 = 60;
+            CGFloat cw0 = (innerW - gap) * w0 / (w0 + w1);
+            CGFloat cw1 = innerW - gap - cw0;
+            NSView *w0v = self.columnWraps[i0], *w1v = self.columnWraps[i1];
+            [w0v setFrame:NSMakeRect(pad, yTop - rowH, cw0, rowH)];
+            [w1v setFrame:NSMakeRect(pad + cw0 + gap, yTop - rowH, cw1, rowH)];
+            [self.columnTexts[i0] setFrame:NSMakeRect(tvInset, 8, cw0 - tvInset * 2, rowH - 16)];
+            [self.columnTexts[i1] setFrame:NSMakeRect(tvInset, 8, cw1 - tvInset * 2, rowH - 16)];
+        }
     }
 }
 
 - (void)buildWindow {
-    NSRect frame = NSMakeRect(0, 0, 720, 520);
+    NSRect frame = NSMakeRect(0, 0, 980, 560);
     self.window = [[NSWindow alloc] initWithContentRect:frame
                                               styleMask:(NSWindowStyleMaskTitled |
                                                          NSWindowStyleMaskClosable |
@@ -290,7 +350,7 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
                                                 backing:NSBackingStoreBuffered
                                                   defer:NO];
     [self.window setTitle:@"SetIP · IP 管理器"];
-    [self.window setMinSize:NSMakeSize(560, 420)];
+    [self.window setMinSize:NSMakeSize(700, 460)];
     [self.window center];
     [self.window setDelegate:self];
 
@@ -315,6 +375,8 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
 
     self.columnWraps = [NSMutableArray array];
     self.columnTexts = [NSMutableArray array];
+    self.sectionWidths = [NSMutableArray array];
+    self.sectionHeights = [NSMutableArray array];
 
     // 底部提示条（hint / sub）：横跨卡片、浅色文字，无边框
     NSTextView *hint = [[NSTextView alloc] initWithFrame:NSZeroRect];
@@ -719,7 +781,7 @@ static NSCharacterSet *SetIPFieldSep(void) {
         [tv setSelectable:YES];
         [tv setRichText:NO];
         [tv setDrawsBackground:NO];
-        [tv setTextContainerInset:NSMakeSize(6, 6)];
+        [tv setTextContainerInset:NSMakeSize(2, 4)];
         [wrap addSubview:tv];
         [self.cardView addSubview:wrap];
         [self.columnWraps addObject:wrap];
@@ -746,8 +808,24 @@ static NSCharacterSet *SetIPFieldSep(void) {
                                              color:nil para:nil]];
         }
         [full appendAttributedString:content];
-        [[self.columnTexts[i] textStorage] setAttributedString:full];
+        NSTextStorage *store = [self.columnTexts[i] textStorage];
+        [store setAttributedString:full];
+        // 测量该分区不折行时的自然宽/高（给一个极高、极宽的约束）
+        CGRect used = [store boundingRectWithSize:NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX)
+                                          options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                          context:nil];
+        CGFloat natW = ceil(used.size.width) + 4;
+        CGFloat natH = ceil(used.size.height) + 16;
+        if (i < self.sectionWidths.count) {
+            self.sectionWidths[i] = @(natW);
+            self.sectionHeights[i] = @(natH);
+        } else {
+            [self.sectionWidths addObject:@(natW)];
+            [self.sectionHeights addObject:@(natH)];
+        }
     }
+    while (self.sectionWidths.count > sections.count) [self.sectionWidths removeLastObject];
+    while (self.sectionHeights.count > sections.count) [self.sectionHeights removeLastObject];
 
     // 底部提示条
     if (footerLines.count) {
