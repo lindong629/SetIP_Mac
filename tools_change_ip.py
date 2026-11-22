@@ -9,8 +9,8 @@ from subprocess import Popen, PIPE, call
 
 interface_list = []
 gl_IP = None
-com_ip_list1 = ["255.255.255.0", "192.168.101.1", "114.114.114.114 8.8.8.8", "buyabs.corp"]
-com_ip_list2 = ["255.255.255.0", "192.168.101.1", "192.168.168.254 122.51.145.229 8.8.8.8", "buyabs.corp"]
+com_ip_list1 = ["255.255.254.0", "10.91.140.1", "10.91.140.1"]
+com_ip_list2 = ["255.255.254.0", "10.91.140.1", "10.91.140.1"]
 home_ip_list3 = ["255.255.255.0", "192.168.168.3", "114.114.114.114 8.8.8.8"]
 home_ip_list254 = ["255.255.255.0", "192.168.168.253", "192.168.168.254 192.168.168.3 192.168.168.1", "buyabs.corp"]
 url_list = ["占位","https://www.wlgo.cc/st/go.js",
@@ -150,7 +150,7 @@ def user_input_me(name_input_str):
 
     if user_c_str == "1":
         change_interface_ip(interface_list[name_input_str],
-                            click.prompt("请输入IP：", default="192.168.101.233"),
+                            click.prompt("请输入IP：", default="10.91.140.5"),
                             com_ip_list1[0],
                             com_ip_list1[1],
                             com_ip_list1[2])
@@ -158,7 +158,7 @@ def user_input_me(name_input_str):
 
     elif user_c_str == "2":
         change_interface_ip(interface_list[name_input_str],
-                            click.prompt("请输入IP：", default="192.168.101.233"),
+                            click.prompt("请输入IP：", default="10.91.140.5"),
                             com_ip_list2[0],
                             com_ip_list2[1],
                             com_ip_list2[2])

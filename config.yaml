@@ -14,12 +14,11 @@ company:                # 公司
   search_domains: []    # 示例: [buyabs.corp] 或写成多行 - buyabs.corp
 
 home:                   # 家里
-  ip: 192.168.168.3
+  ip: 192.168.168.102
   netmask: 255.255.255.0
   gateway: 192.168.168.1
   dns:
-    - 114.114.114.114
-    - 8.8.8.8
+    - 192.168.168.241
   search_domains: []
 
 proxy:                  # PAC 自动代理链接（WAN / LAN 地址不同，按需修改）

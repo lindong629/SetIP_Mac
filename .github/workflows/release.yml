@@ -57,18 +57,7 @@ jobs:
         run: pyinstaller --onefile --name SetIP --icon icon.icns --clean -y main.py
 
       - name: Assemble SetIP.app
-        run: |
-          mkdir -p SetIP.app/Contents/MacOS SetIP.app/Contents/Resources
-          cp dist/SetIP SetIP.app/Contents/MacOS/SetIP-bin
-          cp icon.icns SetIP.app/Contents/Resources/icon.icns
-          cp mac/Info.plist SetIP.app/Contents/Info.plist
-          cp mac/launcher SetIP.app/Contents/MacOS/SetIP
-          cp mac/setip.command SetIP.app/Contents/MacOS/setip.command
-          chmod +x SetIP.app/Contents/MacOS/SetIP \
-                   SetIP.app/Contents/MacOS/SetIP-bin \
-                   SetIP.app/Contents/MacOS/setip.command
-          cp config.yaml SetIP.app/Contents/Resources/config.yaml
-          codesign --force --deep --sign - SetIP.app
+        run: ./mac/build_app.sh
 
       - name: Package
         run: zip -r -y SetIP-macOS.zip SetIP.app

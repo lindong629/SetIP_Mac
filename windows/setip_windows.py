@@ -73,6 +73,36 @@ def _detect_color():
 USE_COLOR = _detect_color()
 
 
+class GoHome(Exception):
+    """用户在任意步骤请求返回主界面（输入 m / home）。"""
+
+
+class QuitApp(Exception):
+    """用户在任意步骤请求退出（q）。"""
+
+
+HOME_TOKENS = ("m", "home", "主界面")
+QUIT_TOKENS = ("q", "quit", "exit")
+
+
+def is_home(raw):
+    return (raw or "").strip().lower() in HOME_TOKENS
+
+
+def is_quit(raw):
+    return (raw or "").strip().lower() in QUIT_TOKENS
+
+
+def read_line(prompt=""):
+    """读取一行；统一识别「返回主界面」与「退出」，任意步骤都生效。"""
+    raw = input(prompt)
+    if is_home(raw):
+        raise GoHome()
+    if is_quit(raw):
+        raise QuitApp()
+    return raw
+
+
 def c(text, *styles):
     """给文本加颜色/样式；未启用颜色时原样返回"""
     if not USE_COLOR or not styles:
@@ -135,10 +165,21 @@ def menu_item(key, label, key_style=Style.CYAN):
 
 
 def banner(subtitle=""):
-    print(c("═" * 54, Style.CYAN))
-    print(c("  " + APP_NAME, Style.BOLD, Style.CYAN)
-          + (c("   " + subtitle, Style.DIM) if subtitle else ""))
-    print(c("═" * 54, Style.CYAN))
+    print(c("  " + APP_NAME + (("  ·  " + subtitle) if subtitle else ""),
+            Style.BOLD, Style.CYAN))
+
+
+def clear():
+    """清屏并归位光标：进入下一步时抹掉上一步的输出。"""
+    if not (USE_COLOR or sys.stdout.isatty()):
+        return
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
+
+
+def pause():
+    """停驻一步，让用户看完本步结果后再按回车进入下一步。"""
+    read_line(c("\n  按回车继续 ...", Style.DIM))
 
 CONFIG_TEMPLATE = """\
 # ==========================================================
@@ -366,6 +407,25 @@ def list_adapters():
     return result
 
 
+def active_adapter():
+    """识别当前承载默认路由的网卡名；识别失败返回 None。"""
+    idx = ps("Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | "
+             "Sort-Object RouteMetric | Select-Object -First 1 -ExpandProperty InterfaceIndex")
+    idx = idx.strip().splitlines()[0].strip() if idx.strip() else ""
+    if idx.isdigit() and int(idx) > 0:
+        name = ps("Get-NetAdapter -InterfaceIndex %s -ErrorAction SilentlyContinue | "
+                  "Select-Object -First 1 -ExpandProperty Name" % idx)
+        if name:
+            return name.strip().splitlines()[0].strip()
+    # 兜底：找第一个已连接且拿到有效 IPv4 的网卡
+    for name, status, _desc in list_adapters():
+        if status.lower() == "up":
+            ip, _prefix, _gw, _origin = get_ipv4_info(name)
+            if ip and not ip.startswith("169.254"):
+                return name
+    return None
+
+
 def mask_to_prefix(mask):
     """子网掩码转前缀长度，如 255.255.254.0 -> 23"""
     try:
@@ -438,26 +498,16 @@ def refresh_internet_settings():
 # ---------------------------------------------------------------- 应用设置 --
 
 def report(checks):
-    """打印应用情况校验结果，checks 为 [(名称, 实际值, 期望值), ...]"""
-    section("应用情况")
-    all_ok = True
-    for name, actual, expect in checks:
-        ok = (actual == expect)
-        all_ok = all_ok and ok
-        if ok:
-            print("  %s %s %s" % (c("✓", Style.GREEN, Style.BOLD),
-                                  c(pad(name, 10), Style.GREY),
-                                  c(actual, Style.BOLD)))
-        else:
-            print("  %s %s 实际 %s / 期望 %s" % (
-                c("✗", Style.RED, Style.BOLD), c(pad(name, 10), Style.GREY),
-                c(actual or "（空）", Style.RED), c(expect, Style.GREEN)))
-    if all_ok:
-        print(c("  ✓ 全部生效", Style.GREEN, Style.BOLD))
-    else:
-        print(c("  ⚠ 存在未生效项！请稍后重试；反复失败请检查是否以管理员身份运行",
-                Style.YELLOW, Style.BOLD))
-    print(c(RULE, Style.GREY))
+    """只输出一行结果；全部生效时列实际值，失败时只列不一致项。"""
+    bad = [(name, actual, expect) for name, actual, expect in checks if actual != expect]
+    if not bad:
+        print(c("  ✓ 已生效  ", Style.GREEN, Style.BOLD)
+              + "  ".join("%s %s" % (name, actual) for name, actual, _ in checks))
+        return
+    print(c("  ✗ 未生效：", Style.RED, Style.BOLD)
+          + "；".join("%s 实际 %s / 期望 %s" % (name, actual or "空", expect)
+                     for name, actual, expect in bad))
+    hint("反复失败请检查是否以管理员身份运行")
 
 
 def netsh(args):
@@ -467,12 +517,11 @@ def netsh(args):
 
 
 def apply_manual(service, ip, netmask, gateway, dns_list, search_domains):
-    step("正在设置 IP")
+    step("正在应用静态 IP")
     netsh(["interface", "ipv4", "set", "address", "name=%s" % service,
            "source=static", "addr=%s" % ip, "mask=%s" % netmask,
            "gateway=%s" % (gateway or "none")])
 
-    step("正在设置 DNS")
     if dns_list:
         netsh(["interface", "ipv4", "set", "dnsservers", "name=%s" % service,
                "source=static", "addr=%s" % dns_list[0], "validate=no"])
@@ -483,7 +532,6 @@ def apply_manual(service, ip, netmask, gateway, dns_list, search_domains):
         netsh(["interface", "ipv4", "set", "dnsservers", "name=%s" % service,
                "source=static", "addr=none", "validate=no"])
 
-    step("正在设置搜索域")
     ps("$g=(Get-NetAdapter -InterfaceAlias '%s' -ErrorAction SilentlyContinue).InterfaceGuid; "
        "if($g){ Set-ItemProperty -Path \"HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\$g\" "
        "-Name SearchList -Value '%s' }" % (service, ",".join(search_domains)))
@@ -495,7 +543,7 @@ def apply_manual(service, ip, netmask, gateway, dns_list, search_domains):
     expect_prefix = mask_to_prefix(netmask)
     report([
         ("IP 地址", cur_ip, ip),
-        ("子网掩码", "/%d" % prefix if prefix >= 0 else "（空）", "/%d (%s)" % (expect_prefix, netmask)),
+        ("子网掩码", "/%d" % prefix if prefix >= 0 else "（空）", "/%d" % expect_prefix),
         ("网关", gw or "（空）", gateway or "On-link"),
         ("DNS", " ".join(cur_dns) or "（已清除）", " ".join(dns_list) if dns_list else "（已清除）"),
         ("搜索域", " ".join(cur_suffix) or "（已清除）", " ".join(search_domains) if search_domains else "（已清除）"),
@@ -503,7 +551,7 @@ def apply_manual(service, ip, netmask, gateway, dns_list, search_domains):
 
 
 def apply_dhcp(service):
-    step("正在切换为 DHCP 自动获取")
+    step("正在切换 DHCP")
     netsh(["interface", "ipv4", "set", "address", "name=%s" % service, "source=dhcp"])
     netsh(["interface", "ipv4", "set", "dnsservers", "name=%s" % service, "source=dhcp"])
     ps("$g=(Get-NetAdapter -InterfaceAlias '%s' -ErrorAction SilentlyContinue).InterfaceGuid; "
@@ -522,8 +570,7 @@ def apply_dhcp(service):
 
 
 def apply_pac(url):
-    step("正在设置 PAC 代理")
-    hint(url)
+    step("正在设置 PAC")
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, INTERNET_SETTINGS, 0, winreg.KEY_SET_VALUE)
         winreg.SetValueEx(key, "AutoConfigURL", 0, winreg.REG_SZ, url)
@@ -571,44 +618,28 @@ def show_info(service):
     dns = get_dns(service)
     suffix = get_search_domains(service)
     enabled, url = get_pac_state()
-    section("当前网络配置 · %s" % service)
-    origin_style = Style.GREEN if origin == "Dhcp" else None
-    row("地址来源", origin or c("（空）", Style.DIM), 12, origin_style)
-    row("IP 地址", ip or c("（空）", Style.DIM), 12, Style.BOLD)
-    row("前缀长度", "/%s" % prefix if prefix >= 0 else c("（空）", Style.DIM), 12)
-    row("网关", gw or c("（空）", Style.DIM), 12)
-    row("DNS", " ".join(dns) or c("（未设置）", Style.DIM), 12)
-    row("搜索域", " ".join(suffix) or c("（未设置）", Style.DIM), 12)
-    if enabled:
-        row("PAC 代理", c("已启用", Style.GREEN, Style.BOLD) + "  →  " + url, 12)
-    else:
-        row("PAC 代理", c("已关闭", Style.DIM), 12)
-    print(c(RULE, Style.GREY))
-
-
-def print_config_items():
-    print(c("  ── 修改配置 " + "─" * 40, Style.GREY))
-    menu_item("5", "修改公司配置", Style.BLUE)
-    menu_item("6", "修改家里配置", Style.BLUE)
-    menu_item("7", "修改 PAC 代理链接", Style.BLUE)
-    menu_item("8", "打开配置文件", Style.BLUE)
+    print("  %s %s  %s %s/%s  网关 %s" % (
+        c("当前 ·", Style.GREY), c(service, Style.BOLD, Style.CYAN),
+        c(origin or "手动", Style.DIM), ip or "-",
+        (str(prefix) if prefix >= 0 else "-"), gw or "-"))
+    pac = c("开 " + url if enabled and url else ("开" if enabled else "关"),
+            Style.GREEN if enabled else Style.DIM)
+    print("  DNS %s  搜索域 %s  PAC %s" % (
+        " ".join(dns) or "无", " ".join(suffix) or "无", pac))
 
 
 def config_summary(profiles):
     """列出当前配置，方便在选网卡前确认参数"""
     company, home, proxy = profiles["company"], profiles["home"], profiles["proxy"]
-    section("当前配置")
     for label, p, color in (("公司", company, Style.GREEN), ("家里", home, Style.CYAN)):
-        print("  %s  %s" % (c(label, Style.BOLD, color),
-                            c("%s / %s" % (p["ip"] or "空", p["netmask"] or "空"), Style.BOLD)))
-        parts = [c("网关", Style.GREY), p["gateway"] or "空",
-                 c("DNS", Style.GREY), " ".join(p["dns"]) or "无"]
+        parts = ["%s/%s" % (p["ip"] or "空", p["netmask"] or "空"),
+                 "网关 " + (p["gateway"] or "空"),
+                 "DNS " + (" ".join(p["dns"]) or "无")]
         if p["search_domains"]:
-            parts += [c("搜索域", Style.GREY), " ".join(p["search_domains"])]
-        print("        " + "  ".join(parts))
-    print("  %s  %s %s" % (c("PAC", Style.BOLD, Style.MAGENTA),
-                           c("WAN", Style.GREY), proxy["wan"] or c("未配置", Style.DIM)))
-    print("        %s %s" % (c("LAN", Style.GREY), proxy["lan"] or c("未配置", Style.DIM)))
+            parts.append("搜索域 " + " ".join(p["search_domains"]))
+        print("  %s %s" % (c(label, Style.BOLD, color), "  ".join(parts)))
+    print("  %s WAN %s  LAN %s" % (c("PAC", Style.BOLD, Style.MAGENTA),
+                                   proxy["wan"] or "未配置", proxy["lan"] or "未配置"))
 
 
 def choose_service(profiles):
@@ -618,27 +649,30 @@ def choose_service(profiles):
         error("未找到任何网卡，请检查设备管理器")
         sys.exit(1)
 
-    section("可操作的网卡")
+    active = active_adapter()
+    section("网卡")
     for i, (name, status, desc) in enumerate(adapters):
         up = status.lower() == "up"
-        status_cell = c(pad("(%s)" % status, 15), Style.GREEN if up else Style.DIM)
-        print("  %s %s  %s  %s" % (c(pad("[%d]" % i, 3), Style.BOLD, Style.CYAN),
-                                   c(pad(name, 14), Style.BOLD),
-                                   status_cell,
-                                   c(desc, Style.DIM)))
+        mark = c("  ★ 当前活动", Style.GREEN, Style.BOLD) if name == active else ""
+        print("  %s %-14s %-5s %s%s" % (c(pad("[%d]" % i, 3), Style.BOLD, Style.CYAN),
+                                        c(name, Style.GREEN if up else Style.DIM),
+                                        status, c(desc, Style.DIM), mark))
+    if not active:
+        warn("未识别到活动网卡，请手动选序号")
 
-    print("")
     config_summary(profiles)
-
-    print(c(RULE, Style.GREY))
-    print("  %s 改公司配置   %s 改家里配置   %s 改 PAC 链接   %s 打开配置文件" % (
-        c("c", Style.BOLD, Style.BLUE), c("h", Style.BOLD, Style.BLUE),
-        c("p", Style.BOLD, Style.BLUE), c("o", Style.BOLD, Style.BLUE)))
+    hint("c 改公司 · h 改家里 · p 改 PAC · o 配置文件 · q 退出")
 
     last = len(adapters) - 1
-    prompt = c("请输入网卡序号 (0-%d)，或 c/h/p/o 改配置，q 退出: " % last, Style.BOLD, Style.CYAN)
+    default_hint = ("，回车=" + active) if active else ""
+    prompt = c("序号 (0-%d%s): " % (last, default_hint), Style.BOLD, Style.CYAN)
     while True:
-        raw = input(prompt).strip().lower()
+        raw = read_line(prompt).strip().lower()
+        if not raw:
+            if active:
+                return "run", active
+            warn("未识别到活动网卡，请输入序号选择")
+            continue
         if raw.isdigit() and 0 <= int(raw) <= last:
             return "run", adapters[int(raw)][0]
         if raw in ("c", "h", "p", "o"):
@@ -650,7 +684,7 @@ def choose_service(profiles):
 
 def prompt_ip(profile):
     prompt = c("请输入 IP（回车使用配置默认 %s）: " % profile["ip"], Style.BOLD, Style.CYAN)
-    raw = input(prompt).strip()
+    raw = read_line(prompt).strip()
     return raw or profile["ip"]
 
 
@@ -685,7 +719,7 @@ def ask(label, current, validator=None, list_value=False):
     prompt = "  %s %s " % (c(pad(label, 12), Style.GREY),
                            c("[%s]:" % shown, Style.DIM))
     while True:
-        raw = input(prompt).strip()
+        raw = read_line(prompt).strip()
         if not raw:
             return list(current) if list_value else current
         if list_value:
@@ -723,7 +757,7 @@ def open_config_in_editor(path):
     """用记事本打开配置文件（会等待记事本关闭）"""
     step("用记事本打开: %s" % path)
     subprocess.run(["notepad", path])
-    input(c("  修改并保存后，按回车键重新加载配置 ... ", Style.BOLD, Style.CYAN))
+    read_line(c("  修改并保存后，按回车键重新加载配置 ... ", Style.BOLD, Style.CYAN))
 
 
 def commit_config(config_path, profiles):
@@ -768,72 +802,84 @@ def main():
         run_as_admin()
         return  # 提权后的新进程接管，本进程退出
 
-    config_path = get_config_path()
-    profiles = load_config(config_path)
-    hint("配置文件: %s" % config_path)
+    state = {"config": get_config_path()}
+    state["profiles"] = load_config(state["config"])
 
-    # 选网卡界面（同时展示当前配置、可直接改配置）
-    service = None
-    while service is None:
-        action, value = choose_service(profiles)
-        if action == "quit":
+    # 外层循环：任意步骤输入 m 即整体回到选网卡主界面
+    while True:
+        try:
+            while True:
+                clear()
+                action, value = choose_service(state["profiles"])
+                if action == "quit":
+                    print(c("  再见！", Style.DIM))
+                    return
+                if action == "edit":
+                    clear()
+                    state["config"], state["profiles"] = handle_edit(
+                        value, state["config"], state["profiles"])
+                    pause()
+                    continue
+                service = value
+                break
+
+            while True:
+                clear()
+                show_info(service)
+                profiles = state["profiles"]
+                print("")
+                print("  %s 1 公司  2 家里  3 DHCP  4 代理 PAC" % c("应用", Style.BOLD, Style.CYAN))
+                hint("5 改公司 · 6 改家里 · 7 改 PAC · 8 配置文件 · m 主界面 · q 退出")
+                choice = read_line(c("选择: ", Style.BOLD, Style.CYAN)).strip().lower()
+
+                if choice in ("q", "quit", "exit"):
+                    print(c("  再见！", Style.DIM))
+                    return
+
+                clear()  # 进入结果屏：抹掉菜单，本屏只留执行过程与结果
+                if choice == "1":
+                    p = profiles["company"]
+                    apply_manual(service, prompt_ip(p), p["netmask"], p["gateway"],
+                                 p["dns"], p["search_domains"])
+                elif choice == "2":
+                    p = profiles["home"]
+                    apply_manual(service, prompt_ip(p), p["netmask"], p["gateway"],
+                                 p["dns"], p["search_domains"])
+                elif choice == "3":
+                    apply_dhcp(service)
+                elif choice == "4":
+                    proxy = profiles["proxy"]
+                    if not proxy["wan"] or not proxy["lan"]:
+                        warn("配置文件中 proxy 段缺少 wan/lan 链接，请先补充: %s" % state["config"])
+                        pause()
+                        continue
+                    hint("1 WAN  2 LAN  3 关闭")
+                    sub = read_line(c("PAC 选择: ", Style.BOLD, Style.CYAN)).strip()
+                    if sub == "1":
+                        apply_pac(proxy["wan"])
+                    elif sub == "2":
+                        apply_pac(proxy["lan"])
+                    elif sub == "3":
+                        apply_pac_off()
+                    else:
+                        warn("输入无效，请输入 1 / 2 / 3")
+                elif choice in ("5", "6", "7", "8"):
+                    clear()
+                    state["config"], state["profiles"] = handle_edit(
+                        choice, state["config"], state["profiles"])
+                else:
+                    warn("输入无效，请输入 1-8 / q")
+                pause()
+        except GoHome:
+            try:
+                state["profiles"] = load_config(state["config"])
+            except SystemExit:
+                pass
+            hint("已返回主界面")
+            continue
+        except QuitApp:
             print(c("  再见！", Style.DIM))
             return
-        if action == "edit":
-            config_path, profiles = handle_edit(value, config_path, profiles)
-            print("")
-            continue
-        service = value
-
-    show_info(service)
-
-    while True:
-        print("")
-        section("请选择操作")
-        menu_item("1", "公司")
-        menu_item("2", "家里")
-        menu_item("3", "DHCP（自动获取）")
-        menu_item("4", "代理 PAC")
-        print_config_items()
-        menu_item("q", "退出", Style.GREY)
-        choice = input(c("请选择: ", Style.BOLD, Style.CYAN)).strip().lower()
-
-        if choice == "1":
-            p = profiles["company"]
-            apply_manual(service, prompt_ip(p), p["netmask"], p["gateway"],
-                         p["dns"], p["search_domains"])
-        elif choice == "2":
-            p = profiles["home"]
-            apply_manual(service, prompt_ip(p), p["netmask"], p["gateway"],
-                         p["dns"], p["search_domains"])
-        elif choice == "3":
-            apply_dhcp(service)
-        elif choice == "4":
-            proxy = profiles["proxy"]
-            if not proxy["wan"] or not proxy["lan"]:
-                warn("配置文件中 proxy 段缺少 wan/lan 链接，请先补充: %s" % config_path)
-                continue
-            print("")
-            section("代理 PAC")
-            menu_item("1", "WAN-PROXY  " + c(proxy["wan"], Style.DIM))
-            menu_item("2", "LAN-PROXY  " + c(proxy["lan"], Style.DIM))
-            menu_item("3", "关闭 PAC 代理", Style.YELLOW)
-            sub = input(c("请选择: ", Style.BOLD, Style.CYAN)).strip()
-            if sub == "1":
-                apply_pac(proxy["wan"])
-            elif sub == "2":
-                apply_pac(proxy["lan"])
-            elif sub == "3":
-                apply_pac_off()
-            else:
-                warn("输入无效，请输入 1 / 2 / 3")
-        elif choice in ("5", "6", "7", "8"):
-            config_path, profiles = handle_edit(choice, config_path, profiles)
-        elif choice in ("q", "quit", "exit"):
-            print(c("  再见！", Style.DIM))
-            break
-        else:
-            warn("输入无效，请输入 1-8 / q")
 
 
 if __name__ == "__main__":
