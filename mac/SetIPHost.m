@@ -1,9 +1,9 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
-// 版本号由 build_app.sh 从 Info.plist 注入；单独编译测试时回退到 2.14。
+// 版本号由 build_app.sh 从 Info.plist 注入；单独编译测试时回退到 2.15。
 #ifndef SETIP_VERSION
-#define SETIP_VERSION "2.14"
+#define SETIP_VERSION "2.15"
 #endif
 
 // SetIP 原生宿主窗口：直接在 App 内运行 SetIP-bin，不再借 Terminal。
@@ -15,8 +15,11 @@
 @property (strong, nonatomic) NSView *headerView;
 @property (strong, nonatomic) NSView *footerView;
 @property (strong, nonatomic) NSView *cardView;
-@property (strong, nonatomic) NSScrollView *scrollView;
-@property (strong, nonatomic) NSTextView *output;
+// 一屏分区布局：每个 title 段落占一个栏位，左右并排；不再使用滚动视图。
+@property (strong, nonatomic) NSMutableArray<NSView *> *columnWraps;
+@property (strong, nonatomic) NSMutableArray<NSTextView *> *columnTexts;
+@property (strong, nonatomic) NSTextView *hintBar;
+@property (nonatomic) CGFloat hintHeight;
 @property (strong, nonatomic) NSTextField *input;
 @property (strong, nonatomic) NSButton *homeButton;
 @property (strong, nonatomic) CAGradientLayer *headerGradient;
@@ -217,7 +220,6 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
     CGFloat h = H - headerH - footerH - gap - pad;
     if (h < 120) h = 120;
     [self.cardView setFrame:NSMakeRect(pad, y, W - pad * 2, h)];
-    [self.scrollView setFrame:self.cardView.bounds];
 
     // 只更新渐变层自身尺寸；切勿遍历所有 sublayer——那会把主界面按钮和圆点的 layer 一起撑满标题栏
     self.headerGradient.frame = self.headerView.bounds;
@@ -236,6 +238,45 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
         for (NSView *inner in inputWrap.subviews) {
             [inner setFrame:NSMakeRect(10, 0, NSWidth(inputWrap.bounds) - 20, NSHeight(inputWrap.bounds))];
         }
+    }
+
+    [self layoutColumns];
+}
+
+// 把已渲染的分区视图排进卡片：hint/sub 汇成底部横条，其余分区按 2 列网格铺满上部。
+- (void)layoutColumns {
+    NSRect card = self.cardView.bounds;
+    CGFloat W = NSWidth(card), H = NSHeight(card);
+    CGFloat pad = 14, gap = 12;
+
+    // 底部提示条：有内容才占位，高度由 render 阶段按行数算好（最多占 40%）
+    BOOL hasHint = !self.hintBar.hidden;
+    CGFloat hintH = hasHint ? self.hintHeight : 0;
+    if (hintH > H * 0.4) hintH = H * 0.4;
+    if (hasHint) {
+        [self.hintBar setFrame:NSMakeRect(pad, pad - 2, W - pad * 2, hintH)];
+    }
+
+    NSUInteger n = self.columnWraps.count;
+    if (n == 0) return;
+    CGFloat top = H - pad;                       // 分区区顶部
+    CGFloat bottom = pad + (hasHint ? hintH + gap : 0);
+    CGFloat availH = top - bottom;               // 分区区可用高度
+    if (availH < 60) availH = 60;
+
+    NSUInteger cols = n >= 2 ? 2 : 1;
+    NSUInteger rows = (n + cols - 1) / cols;
+    CGFloat cellW = (W - pad * 2 - gap * (cols - 1)) / cols;
+    CGFloat cellH = (availH - gap * (rows - 1)) / rows;
+
+    for (NSUInteger i = 0; i < n; i++) {
+        NSUInteger r = i / cols, c = i % cols;
+        CGFloat x = pad + c * (cellW + gap);
+        CGFloat yTop = top - r * (cellH + gap);
+        NSView *wrap = self.columnWraps[i];
+        [wrap setFrame:NSMakeRect(x, yTop - cellH, cellW, cellH)];
+        NSTextView *tv = self.columnTexts[i];
+        [tv setFrame:NSMakeRect(10, 8, cellW - 20, cellH - 16)];
     }
 }
 
@@ -262,7 +303,7 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
     self.footerView = [self footerViewOfWidth:NSWidth(frame) height:60];
     [content addSubview:self.footerView];
 
-    // 卡片容器（带描边与圆角）
+    // 卡片容器（带描边与圆角），内部用分区视图铺满，不再滚动
     NSView *card = [[NSView alloc] initWithFrame:NSZeroRect];
     [card setWantsLayer:YES];
     card.layer.backgroundColor = [SetIPCard() CGColor];
@@ -272,25 +313,21 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
     self.cardView = card;
     [content addSubview:card];
 
-    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:card.bounds];
-    [scroll setHasVerticalScroller:YES];
-    [scroll setDrawsBackground:NO];
-    [scroll setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-    [scroll setScrollerKnobStyle:NSScrollerKnobStyleLight];
+    self.columnWraps = [NSMutableArray array];
+    self.columnTexts = [NSMutableArray array];
 
-    NSTextView *view = [[NSTextView alloc] initWithFrame:[scroll bounds]];
-    [view setEditable:NO];
-    [view setSelectable:YES];
-    [view setRichText:NO];
-    [view setFont:[NSFont systemFontOfSize:13]];
-    [view setTextColor:SetIPInk()];
-    [view setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-    [view setTextContainerInset:NSMakeSize(18, 16)];
-    [view setDrawsBackground:NO];
-    [scroll setDocumentView:view];
-    self.output = view;
-    self.scrollView = scroll;
-    [card addSubview:scroll];
+    // 底部提示条（hint / sub）：横跨卡片、浅色文字，无边框
+    NSTextView *hint = [[NSTextView alloc] initWithFrame:NSZeroRect];
+    [hint setEditable:NO];
+    [hint setSelectable:NO];
+    [hint setRichText:NO];
+    [hint setDrawsBackground:NO];
+    [hint setFont:[self ui:12.5 weight:NSFontWeightRegular]];
+    [hint setTextColor:SetIPGrey()];
+    [hint setTextContainerInset:NSMakeSize(4, 2)];
+    [hint setHidden:YES];
+    self.hintBar = hint;
+    [card addSubview:hint];
 
     [self layoutSubviews];
 }
@@ -598,6 +635,24 @@ static NSCharacterSet *SetIPFieldSep(void) {
     return [self run:plain font:[self mono:13] color:SetIPSub() para:[self para:3 after:3]];
 }
 
+// 把一段（分区）的多行渲染成富文本；withTitle=YES 时首行作为栏目标题突出显示
+- (NSAttributedString *)renderSection:(NSArray *)lines title:(NSString *)title {
+    NSMutableAttributedString *r = [NSMutableAttributedString new];
+    if (title.length) {
+        [r appendAttributedString:[self run:title font:[self ui:14.5 weight:NSFontWeightSemibold]
+                                        color:SetIPBlue() para:[self para:0 after:8]]];
+        [r appendAttributedString:[self run:@"\n" font:[self ui:6 weight:NSFontWeightRegular]
+                                       color:nil para:nil]];
+    }
+    for (NSString *line in lines) {
+        if (line.length == 0) continue;
+        [r appendAttributedString:[self renderTypedLine:line]];
+        [r appendAttributedString:[self run:@"\n" font:[self ui:6 weight:NSFontWeightRegular]
+                                        color:nil para:nil]];
+    }
+    return r;
+}
+
 - (void)render {
     // 遇到 ANSI 清屏（ESC[2J / ESC[H）时，只渲染最后一次清屏之后的内容
     NSString *source = self.raw ?: @"";
@@ -608,16 +663,111 @@ static NSCharacterSet *SetIPFieldSep(void) {
     if (clearH.location  != NSNotFound) from = MAX(from, NSMaxRange(clearH));
     NSString *visible = from > 0 ? [source substringFromIndex:from] : source;
 
-    NSMutableAttributedString *result = [NSMutableAttributedString new];
-    NSArray *lines = [visible componentsSeparatedByString:@"\n"];
-    for (NSString *line in lines) {
+    // 解析为「分区」+「底部提示」：
+    //  - title 开启新分区，其后的内容行归入该分区（含 state/menu/adapter/kv 等）
+    //  - hint / sub 不占分区，汇入底部一条提示带
+    //  - 出现在首个 title 之前的内容（如 state 概览）自成一个分区
+    NSMutableArray *sections = [NSMutableArray array];       // 元素: @{@"title":..., @"lines":[...]}
+    NSMutableArray *footerLines = [NSMutableArray array];
+    NSMutableArray *curLines = nil;
+    NSString *curTitle = nil;
+    for (NSString *line in [visible componentsSeparatedByString:@"\n"]) {
         if (line.length == 0) continue;
-        [result appendAttributedString:[self renderTypedLine:line]];
-        [result appendAttributedString:[self run:@"\n" font:[self ui:6 weight:NSFontWeightRegular]
-                                          color:nil para:nil]];
+        NSString *type = nil;
+        [self fieldsOfLine:line type:&type];
+        NSArray *f = [self fieldsOfLine:line type:nil];
+        NSString *v0 = f.count ? f[0] : @"";
+        if ([type isEqualToString:@"hint"] || [type isEqualToString:@"sub"]) {
+            [footerLines addObject:v0];
+            continue;
+        }
+        if ([type isEqualToString:@"title"]) {
+            if (curLines) {
+                [sections addObject:@{@"title": (curTitle ?: @""), @"lines": curLines}];
+            }
+            curTitle = v0;
+            curLines = [NSMutableArray array];
+            continue;
+        }
+        if (!curLines) {
+            curLines = [NSMutableArray array];
+        }
+        [curLines addObject:line];
     }
-    [[self.output textStorage] setAttributedString:result];
-    [self.output scrollToEndOfDocument:nil];
+    if (curLines) {
+        [sections addObject:@{@"title": (curTitle ?: @""), @"lines": curLines}];
+    }
+    if (sections.count == 0 && footerLines.count == 0) {
+        // 完全空：清掉旧分区
+        for (NSView *w in self.columnWraps) [w removeFromSuperview];
+        [self.columnWraps removeAllObjects];
+        [self.columnTexts removeAllObjects];
+        [self.hintBar setHidden:YES];
+        return;
+    }
+
+    // 复用/创建分区视图
+    while (self.columnWraps.count < sections.count) {
+        NSView *wrap = [[NSView alloc] initWithFrame:NSZeroRect];
+        [wrap setWantsLayer:YES];
+        wrap.layer.backgroundColor = [SetIPHex(@"282A31") CGColor];
+        wrap.layer.cornerRadius = 10;
+        wrap.layer.borderWidth = 1;
+        wrap.layer.borderColor = [SetIPCardEdge() CGColor];
+        NSTextView *tv = [[NSTextView alloc] initWithFrame:NSZeroRect];
+        [tv setEditable:NO];
+        [tv setSelectable:YES];
+        [tv setRichText:NO];
+        [tv setDrawsBackground:NO];
+        [tv setTextContainerInset:NSMakeSize(6, 6)];
+        [wrap addSubview:tv];
+        [self.cardView addSubview:wrap];
+        [self.columnWraps addObject:wrap];
+        [self.columnTexts addObject:tv];
+    }
+    while (self.columnWraps.count > sections.count) {
+        NSView *w = [self.columnWraps lastObject];
+        [w removeFromSuperview];
+        [self.columnWraps removeLastObject];
+        [self.columnTexts removeLastObject];
+    }
+    for (NSUInteger i = 0; i < sections.count; i++) {
+        NSDictionary *sec = sections[i];
+        NSArray *lines = sec[@"lines"];
+        NSString *t = sec[@"title"];
+        // 若分区只有标题+单行内容且标题由 show_info 产生，正文里不含 title，直接渲染
+        NSAttributedString *content = [self renderSection:lines title:nil];
+        // 标题单独占一行渲染到视图顶部
+        NSMutableAttributedString *full = [NSMutableAttributedString new];
+        if (t.length) {
+            [full appendAttributedString:[self run:t font:[self ui:14.5 weight:NSFontWeightSemibold]
+                                              color:SetIPBlue() para:[self para:0 after:8]]];
+            [full appendAttributedString:[self run:@"\n" font:[self ui:6 weight:NSFontWeightRegular]
+                                             color:nil para:nil]];
+        }
+        [full appendAttributedString:content];
+        [[self.columnTexts[i] textStorage] setAttributedString:full];
+    }
+
+    // 底部提示条
+    if (footerLines.count) {
+        NSMutableAttributedString *fh = [NSMutableAttributedString new];
+        for (NSUInteger i = 0; i < footerLines.count; i++) {
+            if (i) [fh appendAttributedString:[self run:@"   ·   " font:[self ui:12 weight:NSFontWeightRegular]
+                                                   color:SetIPGrey() para:nil]];
+            [fh appendAttributedString:[self run:footerLines[i] font:[self ui:12.5 weight:NSFontWeightRegular]
+                                                   color:SetIPGrey() para:[self para:2 after:2]]];
+        }
+        [[self.hintBar textStorage] setAttributedString:fh];
+        [self.hintBar setHidden:NO];
+        // 每行约 21pt，最多留 4 行的高度；实际高度按内容保守估计
+        self.hintHeight = MIN(footerLines.count * 21.0 + 8, 96);
+    } else {
+        [self.hintBar setHidden:YES];
+        self.hintHeight = 0;
+    }
+
+    [self layoutSubviews];
 }
 
 @end
