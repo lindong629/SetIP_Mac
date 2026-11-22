@@ -1,27 +1,45 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
-// 版本号由 build_app.sh 从 Info.plist 注入；单独编译测试时回退到 2.17。
+// 版本号由 build_app.sh 从 Info.plist 注入；单独编译测试时回退到 2.18。
 #ifndef SETIP_VERSION
-#define SETIP_VERSION "2.17"
+#define SETIP_VERSION "2.18"
 #endif
 
 // SetIP 原生宿主窗口：直接在 App 内运行 SetIP-bin，不再借 Terminal。
 // 进程退出（输入 q）后自动结束 App，Dock 里不会残留终端图标或窗口。
 // 视觉：深色主题（对标 WorkBuddy），高对比文字 + 圆角卡片 + 徽章。
 
+// 顶部对齐的内容画布：从视图顶端逐行绘制富文本，短内容不会像 NSTextView 那样垂直居中悬空。
+@interface SetIPCanvas : NSView
+@property (strong, nonatomic) NSAttributedString *content;
+@end
+@implementation SetIPCanvas
+- (void)setContent:(NSAttributedString *)content {
+    _content = content;
+    [self setNeedsDisplay:YES];
+}
+- (void)drawRect:(NSRect)dirtyRect {
+    if (self.content) [self.content drawInRect:self.bounds];
+}
+@end
+
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTextFieldDelegate>
 @property (strong, nonatomic) NSWindow *window;
 @property (strong, nonatomic) NSView *headerView;
 @property (strong, nonatomic) NSView *footerView;
 @property (strong, nonatomic) NSView *cardView;
-// 一屏分区布局：每个 title 段落占一个栏位，左右并排；不再使用滚动视图。
-@property (strong, nonatomic) NSMutableArray<NSView *> *columnWraps;
-@property (strong, nonatomic) NSMutableArray<NSTextView *> *columnTexts;
-@property (strong, nonatomic) NSMutableArray<NSNumber *> *sectionWidths; // 各分区的自然宽度（不折行）
-@property (strong, nonatomic) NSMutableArray<NSNumber *> *sectionHeights; // 各分区的自然高度
+// 固定仪表盘：四个槽位坐标只由窗口尺寸决定，与内容无关；步骤切换时框架纹丝不动。
+@property (strong, nonatomic) NSView *netWrap, *statusWrap, *configWrap, *actionWrap;
+@property (strong, nonatomic) SetIPCanvas *netView, *statusView, *configView, *actionView;
 @property (strong, nonatomic) NSTextView *hintBar;
 @property (nonatomic) CGFloat hintHeight;
+// 跨步骤缓存：信息面板（网卡/配置）常驻，状态/操作面板按屏更新
+@property (strong, nonatomic) NSArray<NSString *> *cachedNet;
+@property (strong, nonatomic) NSArray<NSString *> *cachedStatus;
+@property (strong, nonatomic) NSArray<NSString *> *cachedConfig;
+@property (strong, nonatomic) NSArray<NSString *> *cachedAction;
+@property (nonatomic) BOOL compactRendering; // 槽位内使用紧凑行距
 @property (strong, nonatomic) NSTextField *input;
 @property (strong, nonatomic) NSButton *homeButton;
 @property (strong, nonatomic) CAGradientLayer *headerGradient;
@@ -250,103 +268,72 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
     [self layoutColumns];
 }
 
-// 把已渲染的分区视图排进卡片：hint/sub 汇成底部横条；其余按内容宽度自适应——
-// 内容窄的分区左右并排，内容宽的（如"当前配置"长行）独占整行，确保永不折行。
+// 固定四宫格：坐标只与窗口尺寸有关，绝不随内容变化。槽位空闲时保留上次内容（缓存），
+// 因此步骤切换时框架与信息面板纹丝不动，只有「操作」槽内菜单/结果互换。
 - (void)layoutColumns {
     NSRect card = self.cardView.bounds;
     CGFloat W = NSWidth(card), H = NSHeight(card);
     CGFloat pad = 14, gap = 12;
 
-    // 底部提示条：有内容才占位，高度由 render 阶段按行数算好（最多占 40%）
-    BOOL hasHint = !self.hintBar.hidden;
-    CGFloat hintH = hasHint ? self.hintHeight : 0;
-    if (hintH > H * 0.4) hintH = H * 0.4;
-    if (hasHint) {
-        [self.hintBar setFrame:NSMakeRect(pad, pad - 2, W - pad * 2, hintH)];
-    }
+    // 底部提示条：始终占据固定高度，避免其出现/消失挤动上方槽位
+    CGFloat hintH = self.hintBar.hidden ? 0 : self.hintHeight;
+    if (hintH > 30) hintH = 30;
+    if (!self.hintBar.hidden) [self.hintBar setFrame:NSMakeRect(pad, 2, W - pad * 2, hintH)];
 
-    NSUInteger n = self.columnWraps.count;
-    if (n == 0) return;
+    CGFloat bottom = pad + (self.hintBar.hidden ? 0 : hintH + 6);
     CGFloat top = H - pad;
-    CGFloat bottom = pad + (hasHint ? hintH + gap : 0);
     CGFloat availH = top - bottom;
-    if (availH < 60) availH = 60;
-    CGFloat innerW = W - pad * 2;                 // 卡片内可用宽度
-    CGFloat tvInset = 6;                          // 每个分区视图左右内边距之和的一半
+    if (availH < 120) availH = 120;
+    CGFloat rowH = (availH - gap) / 2;
 
-    // 贪心打包成若干「行」：每行放 1 个或 2 个分区；两分区宽度和放得下才并排。
-    NSMutableArray *rows = [NSMutableArray array]; // 每项是一组分区索引
-    NSMutableArray *curRow = [NSMutableArray array];
-    CGFloat curSum = 0;
-    for (NSUInteger i = 0; i < n; i++) {
-        CGFloat need = (i < self.sectionWidths.count ? [self.sectionWidths[i] floatValue] : innerW / 2);
-        if (need > innerW - tvInset * 2) need = innerW - tvInset * 2; // 超宽内容独占一行，撑满
-        if (curRow.count > 0 && curSum + gap + need > innerW) {
-            [rows addObject:[curRow copy]];
-            curRow = [NSMutableArray array];
-            curSum = 0;
-        }
-        [curRow addObject:@(i)];
-        curSum += need + (curRow.count > 1 ? gap : 0);
-    }
-    if (curRow.count) [rows addObject:[curRow copy]];
+    CGFloat innerW = W - pad * 2;
+    CGFloat rightW = (innerW - gap) * 0.72;   // 右侧放配置/状态（长行多），给足宽度
+    CGFloat leftW = innerW - gap - rightW;
+    CGFloat lx = pad, rx = pad + leftW + gap;
+    CGFloat yTop = bottom + rowH + gap;
 
-    NSUInteger rowCount = rows.count;
-    // 每行自然高度 = 该行各分区自然高度的最大值；按自然高度比例分配可用高度，
-    // 避免内容多的分区（如网卡列表）被平均分配后截断。
-    NSMutableArray *rowNeeds = [NSMutableArray array];
-    CGFloat totalNeed = 0;
-    for (NSArray *idx in rows) {
-        CGFloat need = 60;
-        for (NSNumber *ii in idx) {
-            NSUInteger i = [ii unsignedIntegerValue];
-            CGFloat hh = (i < self.sectionHeights.count ? [self.sectionHeights[i] floatValue] : need);
-            if (hh > need) need = hh;
-        }
-        [rowNeeds addObject:@(need)];
-        totalNeed += need;
-    }
-    CGFloat allocatable = availH - gap * (rowCount - 1);
-    if (allocatable < rowCount * 60) allocatable = rowCount * 60;
+    [self.netWrap    setFrame:NSMakeRect(lx, yTop,  leftW, rowH)];    // 左上：网络服务
+    [self.actionWrap setFrame:NSMakeRect(lx, bottom, leftW, rowH)];   // 左下：操作
+    [self.statusWrap setFrame:NSMakeRect(rx, yTop,  rightW, rowH)];   // 右上：当前网络状态
+    [self.configWrap setFrame:NSMakeRect(rx, bottom, rightW, rowH)];  // 右下：配置模板
 
-    NSMutableArray *rowHeights = [NSMutableArray array];
-    for (NSNumber *need in rowNeeds) {
-        CGFloat h = allocatable * [need floatValue] / totalNeed;
-        if (h < 60) h = 60;
-        [rowHeights addObject:@(h)];
-    }
+    [self placeSlot:self.netWrap    text:self.netView];
+    [self placeSlot:self.actionWrap text:self.actionView];
+    [self placeSlot:self.statusWrap text:self.statusView];
+    [self placeSlot:self.configWrap text:self.configView];
+}
 
-    CGFloat cursorY = top;
-    for (NSUInteger r = 0; r < rowCount; r++) {
-        NSArray *idx = rows[r];
-        CGFloat rowH = [rowHeights[r] floatValue];
-        CGFloat yTop = cursorY;
-        cursorY -= rowH + gap;
-        if (idx.count == 1) {
-            NSUInteger i = [idx[0] unsignedIntegerValue];
-            NSView *wrap = self.columnWraps[i];
-            [wrap setFrame:NSMakeRect(pad, yTop - rowH, innerW, rowH)];
-            [self.columnTexts[i] setFrame:NSMakeRect(tvInset, 8, innerW - tvInset * 2, rowH - 16)];
-        } else {
-            // 两分区并排：按各自自然宽度分配（含内边距），确保内容不折行
-            NSUInteger i0 = [idx[0] unsignedIntegerValue], i1 = [idx[1] unsignedIntegerValue];
-            CGFloat w0 = (i0 < self.sectionWidths.count ? [self.sectionWidths[i0] floatValue] : innerW / 2) + tvInset * 2;
-            CGFloat w1 = (i1 < self.sectionWidths.count ? [self.sectionWidths[i1] floatValue] : innerW / 2) + tvInset * 2;
-            if (w0 < 60) w0 = 60;
-            if (w1 < 60) w1 = 60;
-            CGFloat cw0 = (innerW - gap) * w0 / (w0 + w1);
-            CGFloat cw1 = innerW - gap - cw0;
-            NSView *w0v = self.columnWraps[i0], *w1v = self.columnWraps[i1];
-            [w0v setFrame:NSMakeRect(pad, yTop - rowH, cw0, rowH)];
-            [w1v setFrame:NSMakeRect(pad + cw0 + gap, yTop - rowH, cw1, rowH)];
-            [self.columnTexts[i0] setFrame:NSMakeRect(tvInset, 8, cw0 - tvInset * 2, rowH - 16)];
-            [self.columnTexts[i1] setFrame:NSMakeRect(tvInset, 8, cw1 - tvInset * 2, rowH - 16)];
-        }
-    }
+// 槽位内部：固定标题条 + 内容视图（坐标固定，不测量文本）
+- (void)placeSlot:(NSView *)wrap text:(SetIPCanvas *)cv {
+    CGFloat w = NSWidth(wrap.bounds), h = NSHeight(wrap.bounds);
+    NSView *cap = [wrap viewWithTag:88];
+    if (cap) [cap setFrame:NSMakeRect(12, h - 30, w - 24, 20)];
+    [cv setFrame:NSMakeRect(6, 6, w - 12, h - 36)];
+}
+
+// 构造一个固定槽位：圆角卡片 + 顶部小标题 + 顶部对齐内容画布（frame 由 layoutColumns 统一设定）
+- (NSView *)makeSlotTitle:(NSString *)title outText:(SetIPCanvas **)outText {
+    NSView *wrap = [[NSView alloc] initWithFrame:NSZeroRect];
+    [wrap setWantsLayer:YES];
+    wrap.layer.backgroundColor = [SetIPHex(@"282A31") CGColor];
+    wrap.layer.cornerRadius = 10;
+    wrap.layer.borderWidth = 1;
+    wrap.layer.borderColor = [SetIPCardEdge() CGColor];
+
+    NSTextField *cap = [self labelWithString:title frame:NSZeroRect
+                                        font:[self ui:12.5 weight:NSFontWeightSemibold]
+                                       color:SetIPBlue()];
+    [cap setTag:88];
+    [wrap addSubview:cap];
+
+    SetIPCanvas *cv = [[SetIPCanvas alloc] initWithFrame:NSZeroRect];
+    [wrap addSubview:cv];
+    if (outText) *outText = cv;
+    return wrap;
 }
 
 - (void)buildWindow {
-    NSRect frame = NSMakeRect(0, 0, 980, 560);
+    NSRect frame = NSMakeRect(0, 0, 1000, 600);
     self.window = [[NSWindow alloc] initWithContentRect:frame
                                               styleMask:(NSWindowStyleMaskTitled |
                                                          NSWindowStyleMaskClosable |
@@ -355,7 +342,7 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
                                                 backing:NSBackingStoreBuffered
                                                   defer:NO];
     [self.window setTitle:@"SetIP · IP 管理器"];
-    [self.window setMinSize:NSMakeSize(700, 460)];
+    [self.window setMinSize:NSMakeSize(820, 520)];
     [self.window center];
     [self.window setDelegate:self];
 
@@ -368,7 +355,7 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
     self.footerView = [self footerViewOfWidth:NSWidth(frame) height:60];
     [content addSubview:self.footerView];
 
-    // 卡片容器（带描边与圆角），内部用分区视图铺满，不再滚动
+    // 卡片容器（固定框架，尺寸由 layoutSubviews 设定，跨步骤不变）
     NSView *card = [[NSView alloc] initWithFrame:NSZeroRect];
     [card setWantsLayer:YES];
     card.layer.backgroundColor = [SetIPCard() CGColor];
@@ -378,10 +365,26 @@ static NSColor *SetIPChipGrey(void)  { return SetIPHex(@"353842"); }
     self.cardView = card;
     [content addSubview:card];
 
-    self.columnWraps = [NSMutableArray array];
-    self.columnTexts = [NSMutableArray array];
-    self.sectionWidths = [NSMutableArray array];
-    self.sectionHeights = [NSMutableArray array];
+    // 固定四槽位：位置由 layoutColumns 统一算定，跨步骤不变。
+    // 左上=网络服务列表  左下=应用操作区  右上=当前网络状态  右下=配置模板
+    SetIPCanvas *netText = nil, *statusText = nil, *configText = nil, *actionText = nil;
+    self.netWrap    = [self makeSlotTitle:@"网络服务"     outText:&netText];
+    self.statusWrap = [self makeSlotTitle:@"当前网络状态" outText:&statusText];
+    self.configWrap = [self makeSlotTitle:@"配置模板"     outText:&configText];
+    self.actionWrap = [self makeSlotTitle:@"操作"         outText:&actionText];
+    self.netView = netText;
+    self.statusView = statusText;
+    self.configView = configText;
+    self.actionView = actionText;
+    [card addSubview:self.netWrap];
+    [card addSubview:self.statusWrap];
+    [card addSubview:self.configWrap];
+    [card addSubview:self.actionWrap];
+
+    self.cachedNet = @[];
+    self.cachedStatus = @[];
+    self.cachedConfig = @[];
+    self.cachedAction = @[];
     self.selectOptions = @[];
     self.selectedIndex = -1;
     self.lastClearFrom = 0;
@@ -698,7 +701,7 @@ static NSCharacterSet *SetIPFieldSep(void) {
                       [label isEqualToString:@"家里"] ? SetIPTeal() : SetIPPurple();
         [r appendAttributedString:[self badge:label fore:lc back:SetIPChipGrey() para:p]];
         [r appendAttributedString:[self run:@"   " font:[self ui:14 weight:NSFontWeightRegular] color:nil para:p]];
-        [r appendAttributedString:[self run:val(1) font:[self mono:13]
+        [r appendAttributedString:[self run:val(1) font:[self mono:12]
                                        color:SetIPSub() para:p]];
         return r;
     }
@@ -782,8 +785,26 @@ static NSCharacterSet *SetIPFieldSep(void) {
     return r;
 }
 
+// 把一组 token 行渲染进固定槽位（紧凑行距；空列表显示淡色占位，避免大片空白）
+- (void)drawLines:(NSArray<NSString *> *)lines into:(SetIPCanvas *)view placeholder:(NSString *)placeholder {
+    NSMutableAttributedString *r = [NSMutableAttributedString new];
+    self.compactRendering = YES;
+    if (lines.count == 0 && placeholder.length) {
+        [r appendAttributedString:[self run:placeholder font:[self ui:13 weight:NSFontWeightRegular]
+                                        color:SetIPHex(@"5E6472") para:[self para:0 after:0]]];
+    }
+    for (NSString *line in lines) {
+        if (line.length == 0) continue;
+        [r appendAttributedString:[self renderTypedLine:line]];
+        [r appendAttributedString:[self run:@"\n" font:[self ui:6 weight:NSFontWeightRegular]
+                                        color:nil para:nil]];
+    }
+    self.compactRendering = NO;
+    [view setContent:r];
+}
+
 - (void)render {
-    // 遇到 ANSI 清屏（ESC[2J / ESC[H）时，只渲染最后一次清屏之后的内容
+    // 遇到 ANSI 清屏（ESC[2J / ESC[H）时，只解析最后一次清屏之后的内容
     NSString *source = self.raw ?: @"";
     NSRange clear2J = [source rangeOfString:@"\033[2J" options:NSBackwardsSearch];
     NSRange clearH  = [source rangeOfString:@"\033[H"  options:NSBackwardsSearch];
@@ -792,33 +813,34 @@ static NSCharacterSet *SetIPFieldSep(void) {
     if (clearH.location  != NSNotFound) from = MAX(from, NSMaxRange(clearH));
     NSString *visible = from > 0 ? [source substringFromIndex:from] : source;
 
-    // 换屏（新的清屏序列）时重置方向键选中态，避免上一屏的高亮残留到新屏
+    // 换屏时重置方向键选中态
     if (from > self.lastClearFrom) {
         self.lastClearFrom = from;
         self.selectedIndex = -1;
     }
 
-    // 解析为「分区」+「底部提示」：
-    //  - title 开启新分区，其后的内容行归入该分区（含 state/menu/adapter/kv 等）
-    //  - hint / sub 不占分区，汇入底部一条提示带
-    //  - 出现在首个 title 之前的内容（如 state 概览）自成一个分区
-    NSMutableArray *sections = [NSMutableArray array];       // 元素: @{@"title":..., @"lines":[...]}
-    NSMutableArray *footerLines = [NSMutableArray array];
-    NSMutableArray *curLines = nil;
-    NSString *curTitle = nil;
-    NSMutableArray *options = [NSMutableArray array];         // 方向键可选项: @{@"key",@"value",@"line"}
+    // 按类型把当前屏的 token 分到四个固定槽位。title 忽略（槽位标题已固定）。
+    NSMutableArray *adapterLines = [NSMutableArray array];
+    NSMutableArray *stateLines   = [NSMutableArray array];
+    NSMutableArray *kvLines      = [NSMutableArray array];
+    NSMutableArray *actionLines  = [NSMutableArray array];
+    NSMutableArray *footerLines  = [NSMutableArray array];
+    NSMutableArray *options      = [NSMutableArray array]; // 方向键可选项，仅取当前屏
+
     for (NSString *line in [visible componentsSeparatedByString:@"\n"]) {
         if (line.length == 0) continue;
         NSString *type = nil;
         [self fieldsOfLine:line type:&type];
         NSArray *f = [self fieldsOfLine:line type:nil];
         NSString *v0 = f.count ? f[0] : @"";
+
         if ([type isEqualToString:@"hint"] || [type isEqualToString:@"sub"]) {
             [footerLines addObject:v0];
             continue;
         }
-        // 收集可方向键选择的项。adapter 的 token 首字段形如 [0]，提交给 Python 时要去掉方括号；
-        // menu 的 token 首字段（1/2/3/4）本身就是合法输入，直接使用。
+        if ([type isEqualToString:@"title"]) continue;
+
+        // adapter 首字段形如 [0]：提交给 Python 时去掉方括号；menu 的 1/2/3/4 直接可用
         if ([type isEqualToString:@"adapter"] || [type isEqualToString:@"menu"]) {
             NSString *value = v0;
             if ([type isEqualToString:@"adapter"]) {
@@ -827,94 +849,27 @@ static NSCharacterSet *SetIPFieldSep(void) {
             }
             [options addObject:@{@"key": v0, @"value": value, @"line": line}];
         }
-        if ([type isEqualToString:@"title"]) {
-            if (curLines) {
-                [sections addObject:@{@"title": (curTitle ?: @""), @"lines": curLines}];
-            }
-            curTitle = v0;
-            curLines = [NSMutableArray array];
-            continue;
-        }
-        if (!curLines) {
-            curLines = [NSMutableArray array];
-        }
-        [curLines addObject:line];
+        if ([type isEqualToString:@"adapter"]) { [adapterLines addObject:line]; continue; }
+        if ([type isEqualToString:@"state"])   { [stateLines addObject:line];   continue; }
+        if ([type isEqualToString:@"kv"])      { [kvLines addObject:line];      continue; }
+        [actionLines addObject:line]; // menu / step / ok / fail / warn / text
     }
-    if (curLines) {
-        [sections addObject:@{@"title": (curTitle ?: @""), @"lines": curLines}];
-    }
-    // 本屏可选项定稿；若上一屏的选中下标已越界则归零（换屏时上面已重置）
+
     self.selectOptions = options;
     if (self.selectedIndex >= (NSInteger)options.count) self.selectedIndex = -1;
-    if (sections.count == 0 && footerLines.count == 0) {
-        // 完全空：清掉旧分区
-        for (NSView *w in self.columnWraps) [w removeFromSuperview];
-        [self.columnWraps removeAllObjects];
-        [self.columnTexts removeAllObjects];
-        [self.hintBar setHidden:YES];
-        return;
-    }
 
-    // 复用/创建分区视图
-    while (self.columnWraps.count < sections.count) {
-        NSView *wrap = [[NSView alloc] initWithFrame:NSZeroRect];
-        [wrap setWantsLayer:YES];
-        wrap.layer.backgroundColor = [SetIPHex(@"282A31") CGColor];
-        wrap.layer.cornerRadius = 10;
-        wrap.layer.borderWidth = 1;
-        wrap.layer.borderColor = [SetIPCardEdge() CGColor];
-        NSTextView *tv = [[NSTextView alloc] initWithFrame:NSZeroRect];
-        [tv setEditable:NO];
-        [tv setSelectable:YES];
-        [tv setRichText:NO];
-        [tv setDrawsBackground:NO];
-        [tv setTextContainerInset:NSMakeSize(2, 4)];
-        [wrap addSubview:tv];
-        [self.cardView addSubview:wrap];
-        [self.columnWraps addObject:wrap];
-        [self.columnTexts addObject:tv];
-    }
-    while (self.columnWraps.count > sections.count) {
-        NSView *w = [self.columnWraps lastObject];
-        [w removeFromSuperview];
-        [self.columnWraps removeLastObject];
-        [self.columnTexts removeLastObject];
-    }
-    for (NSUInteger i = 0; i < sections.count; i++) {
-        NSDictionary *sec = sections[i];
-        NSArray *lines = sec[@"lines"];
-        NSString *t = sec[@"title"];
-        // 若分区只有标题+单行内容且标题由 show_info 产生，正文里不含 title，直接渲染
-        NSAttributedString *content = [self renderSection:lines title:nil];
-        // 标题单独占一行渲染到视图顶部
-        NSMutableAttributedString *full = [NSMutableAttributedString new];
-        if (t.length) {
-            [full appendAttributedString:[self run:t font:[self ui:14.5 weight:NSFontWeightSemibold]
-                                              color:SetIPBlue() para:[self para:0 after:8]]];
-            [full appendAttributedString:[self run:@"\n" font:[self ui:6 weight:NSFontWeightRegular]
-                                             color:nil para:nil]];
-        }
-        [full appendAttributedString:content];
-        NSTextStorage *store = [self.columnTexts[i] textStorage];
-        [store setAttributedString:full];
-        // 测量该分区不折行时的自然宽/高（给一个极高、极宽的约束）
-        CGRect used = [store boundingRectWithSize:NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX)
-                                          options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
-                                          context:nil];
-        CGFloat natW = ceil(used.size.width) + 4;
-        CGFloat natH = ceil(used.size.height) + 16;
-        if (i < self.sectionWidths.count) {
-            self.sectionWidths[i] = @(natW);
-            self.sectionHeights[i] = @(natH);
-        } else {
-            [self.sectionWidths addObject:@(natW)];
-            [self.sectionHeights addObject:@(natH)];
-        }
-    }
-    while (self.sectionWidths.count > sections.count) [self.sectionWidths removeLastObject];
-    while (self.sectionHeights.count > sections.count) [self.sectionHeights removeLastObject];
+    // 信息面板：本屏出现该类内容才刷新缓存，否则沿用上一屏——这就是"界面不跳动"的关键。
+    if (adapterLines.count) self.cachedNet = adapterLines;
+    if (stateLines.count)   self.cachedStatus = stateLines;
+    if (kvLines.count)      self.cachedConfig = kvLines;
+    if (actionLines.count)  self.cachedAction = actionLines;
 
-    // 底部提示条
+    [self drawLines:self.cachedNet    into:self.netView    placeholder:@"选择一张网卡，或用 ↑↓ 方向键切换"];
+    [self drawLines:self.cachedStatus into:self.statusView placeholder:@"选中网卡后显示实时状态"];
+    [self drawLines:self.cachedConfig into:self.configView placeholder:@"当前配置"];
+    [self drawLines:self.cachedAction into:self.actionView placeholder:@"选择网卡后显示可用操作"];
+
+    // 底部提示条：高度固定，内容只在本屏有提示时更新
     if (footerLines.count) {
         NSMutableAttributedString *fh = [NSMutableAttributedString new];
         for (NSUInteger i = 0; i < footerLines.count; i++) {
@@ -925,11 +880,11 @@ static NSCharacterSet *SetIPFieldSep(void) {
         }
         [[self.hintBar textStorage] setAttributedString:fh];
         [self.hintBar setHidden:NO];
-        // 每行约 21pt，最多留 4 行的高度；实际高度按内容保守估计
-        self.hintHeight = MIN(footerLines.count * 21.0 + 8, 96);
+        self.hintHeight = 28;
     } else {
-        [self.hintBar setHidden:YES];
-        self.hintHeight = 0;
+        [self.hintBar setHidden:NO]; // 始终占位，避免高度变化挤动槽位
+        [[self.hintBar textStorage] setAttributedString:[NSMutableAttributedString new]];
+        self.hintHeight = 28;
     }
 
     [self layoutSubviews];
